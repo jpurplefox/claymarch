@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scene viewer</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #111; color: #ddd; font: 13px/1.4 ui-monospace, Menlo, monospace; overflow: hidden; }
+  canvas { width: 100vw; height: 100vh; display: block; cursor: grab; touch-action: none; }
+  canvas:active { cursor: grabbing; }
+  #hud { position: fixed; left: 10px; top: 8px; background: #000a; padding: 4px 8px; border-radius: 4px; color: #9c9; pointer-events: none; }
+  #help { position: fixed; left: 10px; bottom: 8px; background: #000a; padding: 4px 8px; border-radius: 4px; color: #aaa; pointer-events: none; }
+  #err { position: fixed; inset: 40px 10px auto 10px; background: #300e; color: #fbb; padding: 10px; border-radius: 6px; white-space: pre-wrap; display: none; max-height: 70vh; overflow: auto; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">loading…</div>
+<div id="help">drag: orbit · wheel: zoom · space: pause · R: reset · 1/2/3: resolution</div>
+<pre id="err"></pre>
+<script type="module" src="main.js"></script>
+</body>
+</html>
