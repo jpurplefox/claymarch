@@ -1,6 +1,6 @@
 """Caterpie: la cabeza, las secciones 2 a 6 del cuerpo y la cola.
 
-Para verlo:   python -m sculpt examples/caterpie.py --port 8771
+Para verlo:   python -m claymarch examples/caterpie.py --port 8771
 
 Ejes: y es arriba, z es el frente (hacia donde mira), x es el costado.
 
@@ -10,7 +10,7 @@ en el orden en que están escritas, y cada una dice qué hace con lo anterior:
 se suma (lo normal), se resta (carve), se funde (join) o se dibuja encima
 (patch).
 """
-import sculpt
+import claymarch
 
 
 # ------------------------------------------------------------------ colores
@@ -33,7 +33,7 @@ def shade(color, k):
     return tuple(min(1.0, c * k) for c in color)
 
 
-class Skin(sculpt.Material):
+class Skin(claymarch.Material):
     """Piel con textura.
 
     En vez de un color parejo, manchas suaves entre un tono apenas más
@@ -47,15 +47,15 @@ class Skin(sculpt.Material):
     grain = 45
 
     def color(self, p):
-        blotches = sculpt.noise(p * 6)  # manchas grandes y suaves
-        speckle = sculpt.noise(p * 28)  # moteado fino
+        blotches = claymarch.noise(p * 6)  # manchas grandes y suaves
+        speckle = claymarch.noise(p * 28)  # moteado fino
         k = (blotches * 0.7 + speckle * 0.3 - 0.5) * TEXTURE
         dark = shade(self.base, 0.84)
         light = shade(self.base, 1.14)
-        return sculpt.mix(dark, light, 0.5 + k)
+        return claymarch.mix(dark, light, 0.5 + k)
 
     def bump(self, p):
-        return 0.0025 * TEXTURE * sculpt.fbm(p * self.grain)
+        return 0.0025 * TEXTURE * claymarch.fbm(p * self.grain)
 
 
 class BellySkin(Skin):
@@ -74,18 +74,20 @@ class AntennaSkin(Skin):
 
 
 green = Skin()
-yellow = sculpt.Material(color=YELLOW, specular=0.25)
-black = sculpt.Material(color=BLACK, specular=0.25)
+yellow = claymarch.Material(color=YELLOW, specular=0.25)
+black = claymarch.Material(color=BLACK, specular=0.25)
 red = AntennaSkin()
 cream = BellySkin()
-white = sculpt.Material(color=WHITE, specular=0.25)
-light_green = sculpt.Material(color=LIGHT_GREEN, specular=0.25)  # los anillos
+white = claymarch.Material(color=WHITE, specular=0.25)
+# Los anillos.
+light_green = claymarch.Material(color=LIGHT_GREEN, specular=0.25)
 
 
 # ---------------------------------------------------------------- animación
-# Borrador. La regla de sculpt: una propiedad es un valor fijo, o una función
-# del tiempo t (en segundos) que devuelve el valor. sin(t * velocidad) va y
-# viene entre -1 y 1; multiplicado por un número da cuánto se mueve.
+# Borrador. La regla de claymarch: una propiedad es un valor fijo, o una
+# función del tiempo t (en segundos) que devuelve el valor.
+# sin(t * velocidad) va y viene entre -1 y 1; multiplicado por un número da
+# cuánto se mueve.
 
 # Cuánta animación: 0 lo deja quieto, 2 la exagera.
 A = 1.0
@@ -97,11 +99,11 @@ def pulse(size, i):
     Cada sección late un poco después que la anterior (i * 0.9), así se ve
     una ola que baja por el cuerpo.
     """
-    return lambda t: size * (1 + A * 0.03 * sculpt.sin(t * 3 - i * 0.9))
+    return lambda t: size * (1 + A * 0.03 * claymarch.sin(t * 3 - i * 0.9))
 
 
 # ---------------------------------------------------------------- la cabeza
-class Eye(sculpt.Drawing):
+class Eye(claymarch.Drawing):
     """El ojo es un dibujo: discos apoyados uno sobre otro.
 
     No sobresalen de la cabeza. El ojo no sabe sobre qué va dibujado; la
@@ -109,13 +111,13 @@ class Eye(sculpt.Drawing):
     están escritos: el primero queda abajo.
     """
 
-    rim = sculpt.Disc(0.20, material=yellow)  # el borde
-    pupil = sculpt.Disc(0.13, material=black)
+    rim = claymarch.Disc(0.20, material=yellow)  # el borde
+    pupil = claymarch.Disc(0.13, material=black)
     # El brillo: corrido del centro del ojo, hacia arriba y adelante.
-    shine = sculpt.Disc(0.045, material=white, at=(-0.04, 0.06, 0.05))
+    shine = claymarch.Disc(0.045, material=white, at=(-0.04, 0.06, 0.05))
 
 
-class Antenna(sculpt.Model):
+class Antenna(claymarch.Model):
     """La antena en Y.
 
     Modelada con la base en el origen (donde toca la frente); position la
@@ -124,13 +126,13 @@ class Antenna(sculpt.Model):
     """
 
     # El tallo: sube pegado a la frente, apenas hacia adelante.
-    stem = sculpt.Capsule(
+    stem = claymarch.Capsule(
         (0, 0, 0), (0, 0.28, 0.05), 0.050, 0.055,
         rotation=(30, 0, 0),
     )
     # Un brazo: sale de la punta del tallo hacia el costado y un poco atrás,
     # y termina más grueso. El otro brazo lo hace symmetry.
-    arms = sculpt.Capsule(
+    arms = claymarch.Capsule(
         (0, 0.22, 0.19), (0.38, 0.34, 0.05), 0.050, 0.070,
         symmetry="x",
     )
@@ -141,10 +143,10 @@ class Antenna(sculpt.Model):
 
     def rotation(self, t):
         # Se menea hacia los costados.
-        return (0, 0, A * 6 * sculpt.sin(t * 4))
+        return (0, 0, A * 6 * claymarch.sin(t * 4))
 
 
-class Mouth(sculpt.Model):
+class Mouth(claymarch.Model):
     """La boca: un cono sin punta, redondeado, con un surco en el borde.
 
     Modelada parada, con el centro en el origen; rotation la da vuelta y la
@@ -152,17 +154,17 @@ class Mouth(sculpt.Model):
     queda enterrada y la cara angosta asoma hacia abajo y adelante.
     """
 
-    cone = sculpt.CutCone(0.25, 0.21, 0.28, rounding=0.09)
+    cone = claymarch.CutCone(0.25, 0.21, 0.28, rounding=0.09)
     # El surco: un aro fino sobre el borde redondeado de la punta angosta.
     # Torus(radio, grosor); position lo sube hasta ese borde, y carve lo
     # resta del cono (el número es qué tan suave queda el borde del corte).
-    lip = sculpt.Torus(0.170, 0.012, position=(0, 0.114, 0), carve=0.01)
+    lip = claymarch.Torus(0.170, 0.012, position=(0, 0.114, 0), carve=0.01)
 
     position = (0, -0.30, 0.30)  # relativa a la cabeza: abajo y adelante
     rotation = (140, 0, 0)
 
 
-class Head(sculpt.Model):
+class Head(claymarch.Model):
     """Sección 1: el hueso, los ojos, el hueco, la boca y la antena.
 
     Las piezas se aplican en el orden en que están escritas: primero el
@@ -171,7 +173,7 @@ class Head(sculpt.Model):
     el centro en el origen; position la sube.
     """
 
-    bone = sculpt.Ellipsoid(0.50, 0.45, 0.50)
+    bone = claymarch.Ellipsoid(0.50, 0.45, 0.50)
     # Los ojos van justo después del hueso: un dibujo se pega sobre lo que
     # está escrito antes que él. patch es el punto de la superficie donde va
     # (de costado, apenas arriba y adelante). Solo x > 0: el otro ojo sale
@@ -179,7 +181,7 @@ class Head(sculpt.Model):
     eyes = Eye(patch=(0.44, 0.06, 0.22), symmetry="x")
     # El hueco: un elipsoide centrado cerca de la superficie, abajo y
     # adelante. carve lo resta de lo anterior, con el borde suavizado.
-    hole = sculpt.Ellipsoid(
+    hole = claymarch.Ellipsoid(
         0.26, 0.26, 0.5,
         position=(0, -0.34, 0.34),
         carve=0.06,
@@ -195,8 +197,8 @@ class Head(sculpt.Model):
 
     def rotation(self, t):
         # -15 es la pose (mira hacia arriba); lo demás es el movimiento.
-        nod = A * 3 * sculpt.sin(t * 1.5)  # asiente apenas
-        turn = A * 8 * sculpt.sin(t * 0.9)  # mira a un lado y al otro
+        nod = A * 3 * claymarch.sin(t * 1.5)  # asiente apenas
+        turn = A * 8 * claymarch.sin(t * 0.9)  # mira a un lado y al otro
         return (-15 + nod, self.look + turn, 0)
 
 
@@ -204,15 +206,15 @@ class Head(sculpt.Model):
 # Hay dos formas de sección. La redonda (RoundSection) se usa en las
 # secciones 2 y 3; la de cono (ConeSection), en las 4, 5 y 6. Cada una
 # tiene su panza crema: RoundBelly y ConeBelly.
-class RoundBelly(sculpt.Model):
+class RoundBelly(claymarch.Model):
     """La panza crema de una sección redonda, con sus patas."""
 
     # El tercer radio es cuánto sale hacia adelante.
-    belly = sculpt.Ellipsoid(0.29, 0.27, 0.17)
+    belly = claymarch.Ellipsoid(0.29, 0.27, 0.17)
     # Una pata: una bolita aplastada (menos alta que ancha), centrada sobre
     # la superficie de la panza, así asoma solo la mitad. symmetry hace la
     # otra.
-    legs = sculpt.Ellipsoid(
+    legs = claymarch.Ellipsoid(
         0.070, 0.07, 0.044,
         rotation=(30, -20, 0),
         position=(0.18, -0.07, 0.123),
@@ -224,24 +226,24 @@ class RoundBelly(sculpt.Model):
     position = (0, -0.03, 0.10)  # relativa a la sección: adelante
 
 
-class RoundSection(sculpt.Model):
+class RoundSection(claymarch.Model):
     """Una sección redonda (la 2 y la 3).
 
     El lomo hace de pinza sobre la panza: se le cava el lugar de la panza,
     así sus costados quedan abrazándola, y después se le suma la panza.
     """
 
-    back = sculpt.Ellipsoid(0.39, 0.33, 0.34)
+    back = claymarch.Ellipsoid(0.39, 0.33, 0.34)
     # El anillo: un disco con agujero (inner), dibujado sobre el lomo en un
     # punto del costado (patch) y copiado al otro lado (symmetry).
-    ring = sculpt.Disc(
+    ring = claymarch.Disc(
         0.12, inner=0.08,
         material=light_green,
         patch=(0.36, 0.00, -0.10),
         symmetry="x",
     )
     # El lugar que ocupa la panza, apenas agrandado: es lo que se cava.
-    socket = sculpt.Ellipsoid(
+    socket = claymarch.Ellipsoid(
         0.30, 0.28, 0.18,
         position=(0, -0.03, 0.20),
         carve=0.05,
@@ -254,15 +256,15 @@ class RoundSection(sculpt.Model):
     rotation = (15, 0, 0)
 
 
-class ConeBack(sculpt.Model):
+class ConeBack(claymarch.Model):
     """El lomo verde de una sección de cono, con su anillo dibujado encima.
 
     CutCone(radio de abajo, radio de arriba, alto): ancho arriba (donde se
     une con la sección anterior) y angosto abajo (hacia la cola).
     """
 
-    shell = sculpt.CutCone(0.25, 0.29, 0.60, rounding=0.16)
-    ring = sculpt.Disc(
+    shell = claymarch.CutCone(0.25, 0.29, 0.60, rounding=0.16)
+    ring = claymarch.Disc(
         0.10, inner=0.065,
         material=light_green,
         patch=(0.26, 0.00, -0.07),
@@ -270,20 +272,20 @@ class ConeBack(sculpt.Model):
     )
 
 
-class ConeBelly(sculpt.Model):
+class ConeBelly(claymarch.Model):
     """La panza crema de una sección de cono: el mismo cono, más chico."""
 
-    belly = sculpt.CutCone(0.17, 0.21, 0.55, rounding=0.10)
+    belly = claymarch.CutCone(0.17, 0.21, 0.55, rounding=0.10)
     # El surco: un aro acostado y muy fino que muerde apenas la superficie.
     # Torus(radio del aro, grosor): el radio es el de la panza a esa altura
     # (en el medio, el promedio de sus dos radios); el grosor es cuánto cava.
-    groove = sculpt.Torus(0.19, 0.012, carve=0.01)
+    groove = claymarch.Torus(0.19, 0.012, carve=0.01)
 
     material = cream
     position = (0, 0, 0.02)  # relativa a la sección: adelante
 
 
-class ConeSection(sculpt.Model):
+class ConeSection(claymarch.Model):
     """Una sección de cono (la 4, la 5 y la 6).
 
     La pinza es la misma idea que en la redonda: al lomo se le cava el
@@ -298,7 +300,7 @@ class ConeSection(sculpt.Model):
 
     back = ConeBack(bend=(-15, 0))
     # El lugar de la panza, apenas agrandado: es lo que se cava.
-    socket = sculpt.CutCone(
+    socket = claymarch.CutCone(
         0.19, 0.26, 0.55, rounding=0.10,
         position=(0, 0, 0.13),
         bend=(-15, 0),
@@ -312,7 +314,7 @@ class ConeSection(sculpt.Model):
 
 
 # ------------------------------------------------------------------ la cola
-class Tail(sculpt.Model):
+class Tail(claymarch.Model):
     """La cola: un signo de exclamación.
 
     Modelada parada, con la base en el origen (donde toca el cuerpo);
@@ -320,21 +322,21 @@ class Tail(sculpt.Model):
     """
 
     # El punto: una bolita, la parte más cercana al cuerpo.
-    dot = sculpt.Sphere(0.06, position=(0, 0.05, 0))
+    dot = claymarch.Sphere(0.06, position=(0, 0.05, 0))
     # El palito: una cápsula de dos radios, fina cerca del punto y gruesa
     # en la punta. Entre los dos queda un espacio, como en el signo.
-    stroke = sculpt.Capsule((0, 0.10, 0), (0, 0.45, 0), 0.035, 0.075)
+    stroke = claymarch.Capsule((0, 0.10, 0), (0, 0.45, 0), 0.035, 0.075)
 
     material = cream
     position = (0, 0.05, -1.66)  # la punta de la sección 6
 
     def rotation(self, t):
         # -35 la vuelca hacia atrás; el tercero la menea.
-        return (-35, 0, A * 14 * sculpt.sin(t * 5))
+        return (-35, 0, A * 14 * claymarch.sin(t * 5))
 
 
 # ----------------------------------------------------------- todo el bicho
-class Caterpie(sculpt.Model):
+class Caterpie(claymarch.Model):
     """Todo el bicho.
 
     Como las secciones van una debajo de otra, position sirve para subirlo
@@ -376,7 +378,9 @@ class Caterpie(sculpt.Model):
     bounds = ((0, 0.8, -0.6), 1.7)
 
 
-class CaterpieScene(sculpt.Scene):
+class CaterpieScene(claymarch.Scene):
     caterpie = Caterpie()
-    camera = sculpt.Camera(target=(0, 1.15, 0), distance=3.8, yaw=45, pitch=8)
-    light = sculpt.Light(direction=(0.8, 0.8, 0.5))
+    camera = claymarch.Camera(
+        target=(0, 1.15, 0), distance=3.8, yaw=45, pitch=8
+    )
+    light = claymarch.Light(direction=(0.8, 0.8, 0.5))

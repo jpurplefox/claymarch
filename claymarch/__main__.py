@@ -1,6 +1,6 @@
 """Viewer with automatic reload.
 
-    python -m sculpt examples/caterpie.py [--port 8770]
+    python -m claymarch examples/caterpie.py [--port 8770]
 
 Runs the file, takes its scene (a variable named `scene`, or the last Scene
 subclass defined in it), generates the shader and serves it to the browser.
@@ -64,7 +64,7 @@ class _Quiet(http.server.SimpleHTTPRequestHandler):
 
 
 def main():
-    ap = argparse.ArgumentParser(prog="python -m sculpt", description="Scene viewer with automatic reload")
+    ap = argparse.ArgumentParser(prog="python -m claymarch", description="Scene viewer with automatic reload")
     ap.add_argument("file", help=".py file that defines the scene")
     ap.add_argument("--port", type=int, default=8770)
     ap.add_argument("--out", default=None, help="folder to write to (default: build/<name>)")
@@ -99,7 +99,7 @@ def main():
         # Each generation runs in a fresh Python process, so edits to the scene,
         # to files it imports, and to this library itself are always picked up.
         # An error does not kill the viewer: fix it and save again.
-        result = subprocess.run([sys.executable, "-m", "sculpt", str(source), "--out", str(out), "--once"])
+        result = subprocess.run([sys.executable, "-m", "claymarch", str(source), "--out", str(out), "--once"])
         stamp_text = time.strftime("%H:%M:%S")
         print(f"[{stamp_text}] " + ("scene generated" if result.returncode == 0 else f"error in {source.name}"), flush=True)
 

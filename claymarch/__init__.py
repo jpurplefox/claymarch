@@ -1,6 +1,6 @@
-"""sculpt: describe 3D scenes in Python and translate them to a GLSL shader.
+"""claymarch: describe 3D scenes in Python and translate them to a GLSL shader.
 
-    from sculpt import *
+    from claymarch import *
 
     class Ball(Model):
         body = Sphere(0.5).move(y=0.5)
@@ -14,7 +14,7 @@
 
 To see it, reloading automatically on save:
 
-    python -m sculpt my_scene.py
+    python -m claymarch my_scene.py
 """
 from .expr import (E, Expr, P, T, checker, clamp, cos, fbm, floor, fract, length, maximum,
                    minimum, mix, noise, noise_at, sin, smoothstep, step, stripes, vec)

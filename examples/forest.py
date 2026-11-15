@@ -1,13 +1,13 @@
 """Un lugar para el Caterpie: el suelo, el cielo, la rama y los árboles.
 
-Para verlo:   python -m sculpt examples/forest.py --port 8772
+Para verlo:   python -m claymarch examples/forest.py --port 8772
 
 El Caterpie se importa de caterpie.py tal cual: lo que cambies allá se ve
 acá. Ejes: y es arriba, z es el frente (hacia donde mira), x es el costado.
 """
 import math
 
-import sculpt
+import claymarch
 from caterpie import Caterpie, ConeSection, Head, Tail, pulse
 
 
@@ -54,15 +54,15 @@ def halo(p):
     for x, z, size, _ in SHROOMS:
         reach = 0.30 + 1.0 * size  # hasta dónde llega
         cap = (x, 0.30 * size, z)
-        near = sculpt.smoothstep(reach, 0.0, sculpt.length(p - cap))
+        near = claymarch.smoothstep(reach, 0.0, claymarch.length(p - cap))
         total = total + near ** 2 * size  # al cuadrado: se apaga más suave
     return total * HALO
 
 
 def lit(color, p):
     """El color de una superficie, teñido por el resplandor."""
-    tint = sculpt.clamp(halo(p) * 0.65, 0, 0.7)
-    return sculpt.mix(color, SHROOM_LIGHT, tint)
+    tint = claymarch.clamp(halo(p) * 0.65, 0, 0.7)
+    return claymarch.mix(color, SHROOM_LIGHT, tint)
 
 
 # ------------------------------------------------------------------- el suelo
@@ -73,14 +73,14 @@ def terrain(p):
     suaves.
     """
     # Solo importa dónde estás parado, no la altura.
-    flat = sculpt.vec(p.x, 0, p.z)
+    flat = claymarch.vec(p.x, 0, p.z)
     # Lomas grandes: hasta 0.8 arriba o abajo.
-    hills = 1.6 * (sculpt.noise(flat * 0.16) - 0.5)
+    hills = 1.6 * (claymarch.noise(flat * 0.16) - 0.5)
     # Bultos chicos.
-    lumps = 0.16 * (sculpt.noise(flat * 1.1) - 0.5)
+    lumps = 0.16 * (claymarch.noise(flat * 1.1) - 0.5)
     # Cerca de la rama (el origen) el piso queda parejo; las lomas aparecen
     # de a poco entre 1.5 y 6 de distancia.
-    away = sculpt.smoothstep(1.5, 6.0, sculpt.length(flat))
+    away = claymarch.smoothstep(1.5, 6.0, claymarch.length(flat))
     return hills * away + lumps * (0.3 + 0.7 * away)
 
 
@@ -91,8 +91,8 @@ def ground_at(x, z, sink=0.06):
     apoyar cosas sobre las lomas. sink las hunde un poquito para que no
     queden flotando.
     """
-    hills = 1.6 * (sculpt.noise_at(x * 0.16, 0, z * 0.16) - 0.5)
-    lumps = 0.16 * (sculpt.noise_at(x * 1.1, 0, z * 1.1) - 0.5)
+    hills = 1.6 * (claymarch.noise_at(x * 0.16, 0, z * 0.16) - 0.5)
+    lumps = 0.16 * (claymarch.noise_at(x * 1.1, 0, z * 1.1) - 0.5)
     k = min(1.0, max(0.0, (math.hypot(x, z) - 1.5) / (6.0 - 1.5)))
     away = k * k * (3 - 2 * k)  # lo mismo que smoothstep(1.5, 6.0, ...)
     return hills * away + lumps * (0.3 + 0.7 * away) - sink
@@ -103,7 +103,7 @@ def on_ground(x, z, sink=0.06):
     return (x, ground_at(x, z, sink), z)
 
 
-class Moss(sculpt.Material):
+class Moss(claymarch.Material):
     """Piso de musgo.
 
     color es un método de la posición p: noise(p) da manchas suaves entre 0
@@ -113,9 +113,9 @@ class Moss(sculpt.Material):
     specular = 0.03
 
     def color(self, p):
-        patches = sculpt.noise(p * 1.3)  # manchas grandes
-        speckle = sculpt.noise(p * 9.0)  # moteado fino
-        moss = sculpt.mix(
+        patches = claymarch.noise(p * 1.3)  # manchas grandes
+        speckle = claymarch.noise(p * 9.0)  # moteado fino
+        moss = claymarch.mix(
             (0.20, 0.42, 0.16), (0.44, 0.62, 0.22),
             patches * 0.75 + speckle * 0.25,
         )
@@ -123,15 +123,15 @@ class Moss(sculpt.Material):
 
     def glow(self, p, t):
         # Cerca de un hongo el piso brilla apenas, y late con él.
-        return halo(p) * (0.45 + 0.10 * sculpt.sin(t * 1.8))
+        return halo(p) * (0.45 + 0.10 * claymarch.sin(t * 1.8))
 
     def bump(self, p):
         # Un relieve apenas, para que no sea un espejo.
-        return 0.004 * sculpt.fbm(p * 14)
+        return 0.004 * claymarch.fbm(p * 14)
 
 
 # -------------------------------------------------------------------- la rama
-class Bark(sculpt.Material):
+class Bark(claymarch.Material):
     """Corteza con musgo arriba.
 
     El ruido se estira a lo largo de la rama (z) multiplicando menos esa
@@ -141,43 +141,43 @@ class Bark(sculpt.Material):
     specular = 0.04
 
     def color(self, p):
-        grain = sculpt.fbm(p * (10.0, 10.0, 1.4))
-        wood = sculpt.mix((0.24, 0.15, 0.09), (0.55, 0.39, 0.22), grain)
+        grain = claymarch.fbm(p * (10.0, 10.0, 1.4))
+        wood = claymarch.mix((0.24, 0.15, 0.09), (0.55, 0.39, 0.22), grain)
         # Musgo: aparece donde la rama mira hacia arriba (p.y alto). El noise
         # le desordena el borde para que no sea una línea recta.
-        edge = p.y + 0.35 * (sculpt.noise(p * 2.5) - 0.5)
-        moss = sculpt.smoothstep(0.70, 0.86, edge)
+        edge = p.y + 0.35 * (claymarch.noise(p * 2.5) - 0.5)
+        moss = claymarch.smoothstep(0.70, 0.86, edge)
         # ...pero no en la ramita, que está más alta.
-        moss = moss * sculpt.smoothstep(1.15, 0.95, p.y)
-        return lit(sculpt.mix(wood, (0.33, 0.50, 0.17), moss * 0.85), p)
+        moss = moss * claymarch.smoothstep(1.15, 0.95, p.y)
+        return lit(claymarch.mix(wood, (0.33, 0.50, 0.17), moss * 0.85), p)
 
     def glow(self, p, t):
-        return halo(p) * (0.40 + 0.08 * sculpt.sin(t * 1.8))
+        return halo(p) * (0.40 + 0.08 * claymarch.sin(t * 1.8))
 
     def bump(self, p):
-        return 0.014 * sculpt.fbm(p * (20.0, 20.0, 2.5))
+        return 0.014 * claymarch.fbm(p * (20.0, 20.0, 2.5))
 
 
-class LeafGreen(sculpt.Material):
+class LeafGreen(claymarch.Material):
     """Verde de hoja: más amarillento que el del Caterpie."""
 
     specular = 0.18
 
     def color(self, p):
-        return sculpt.mix(
-            (0.30, 0.58, 0.14), (0.56, 0.76, 0.22), sculpt.noise(p * 5)
+        return claymarch.mix(
+            (0.30, 0.58, 0.14), (0.56, 0.76, 0.22), claymarch.noise(p * 5)
         )
 
 
 # La nervadura, más clara.
-rib_green = sculpt.Material(color=(0.74, 0.86, 0.40), specular=0.10)
+rib_green = claymarch.Material(color=(0.74, 0.86, 0.40), specular=0.10)
 
 # Hacia dónde miran las hojas (grados; el yaw de la cámara con el signo
 # cambiado).
 FACING = -50
 
 
-class HalfLeaf(sculpt.Model):
+class HalfLeaf(claymarch.Model):
     """Media hoja, acostada: cabito cerca del origen, punta hacia +z.
 
     Es lo que comparten dos discos aplastados corridos hacia los costados
@@ -187,21 +187,21 @@ class HalfLeaf(sculpt.Model):
 
     # & es la intersección: lo que está dentro de los dos discos a la vez.
     parts = [
-        sculpt.Ellipsoid(0.30, 0.022, 0.30, position=(0.17, 0, 0.247))
-        & sculpt.Ellipsoid(0.30, 0.022, 0.30, position=(-0.17, 0, 0.247))
+        claymarch.Ellipsoid(0.30, 0.022, 0.30, position=(0.17, 0, 0.247))
+        & claymarch.Ellipsoid(0.30, 0.022, 0.30, position=(-0.17, 0, 0.247))
     ]
 
     rotation = (0, 0, 14)  # cuánto se pliega por el medio; 0 es plana
     symmetry = "x"
 
 
-class Blade(sculpt.Model):
+class Blade(claymarch.Model):
     """La hoja entera: se arma acostada, se para y se arquea a lo largo."""
 
     halves = HalfLeaf
     # La nervadura y el cabito: una cápsula fina de punta a punta, en el
     # pliegue.
-    rib = sculpt.Capsule(
+    rib = claymarch.Capsule(
         (0, 0.0, -0.10), (0, 0.004, 0.46), 0.014, 0.006,
         material=rib_green,
     )
@@ -213,7 +213,7 @@ class Blade(sculpt.Model):
         return (self.curl, 0)
 
 
-class Leaf(sculpt.Model):
+class Leaf(claymarch.Model):
     """Una hoja con punta, de cara al frente, abierta como en un abanico.
 
     fan es cuánto gira dentro de ese abanico (0 cuelga, 90 y -90 salen
@@ -225,7 +225,7 @@ class Leaf(sculpt.Model):
 
     def parts(self, t):
         # Un vaivén suave; cada hoja arranca en otro momento según su fan.
-        sway = 5 * sculpt.sin(t * 1.6 + self.fan * 0.05)
+        sway = 5 * claymarch.sin(t * 1.6 + self.fan * 0.05)
         # El giro del abanico va después de arquearla y antes de orientarla
         # (rotation), por eso no entra en las propiedades de la hoja.
         return [Blade(curl=self.curl).rotate_z(self.fan + sway)]
@@ -239,7 +239,7 @@ BRANCH_TOP = 0.89  # altura del lomo de la rama donde se apoya el Caterpie
 TWIG_TIP = (0.35, 2.00, -3.20)  # donde termina la ramita
 
 
-class Branch(sculpt.Model):
+class Branch(claymarch.Model):
     """Una rama caída, a lo largo del eje z (de adelante hacia atrás).
 
     Curve(inicio, control, fin, radio, radio2): un arco que va de inicio a
@@ -247,18 +247,20 @@ class Branch(sculpt.Model):
     fin.
     """
 
-    trunk = sculpt.Curve(
+    trunk = claymarch.Curve(
         (0.5, 0.35, 2.6), (0.0, 0.62, 0.0), (-0.6, 0.45, -4.2), 0.42, 0.34
     )
     # Nudos: bultos sobre los costados, para que no sea un caño parejo.
-    knot_1 = sculpt.Ellipsoid(0.17, 0.15, 0.22, position=(0.36, 0.60, 0.95))
-    knot_2 = sculpt.Ellipsoid(
+    knot_1 = claymarch.Ellipsoid(0.17, 0.15, 0.22, position=(0.36, 0.60, 0.95))
+    knot_2 = claymarch.Ellipsoid(
         0.14, 0.13, 0.18, position=(-0.42, 0.50, -1.20)
     )
     # Un gajo cortado, corto y grueso.
-    stub = sculpt.Capsule((0.30, 0.50, 1.70), (0.88, 0.64, 1.95), 0.15, 0.13)
+    stub = claymarch.Capsule(
+        (0.30, 0.50, 1.70), (0.88, 0.64, 1.95), 0.15, 0.13
+    )
     # Una ramita viva: sale cerca del extremo de atrás, sube y se afina.
-    twig = sculpt.Curve(
+    twig = claymarch.Curve(
         (-0.30, 0.55, -2.60), (-0.35, 1.55, -2.85), TWIG_TIP, 0.12, 0.04
     )
     # Las hojas. join=0 las suma sin fundirlas con la madera: si no, el
@@ -305,7 +307,7 @@ class Branch(sculpt.Model):
 
 
 # ---------------------------------------------------------------- los árboles
-class TreeBark(sculpt.Material):
+class TreeBark(claymarch.Material):
     """Corteza de árbol grande.
 
     Vetas verticales (el ruido se estira en y) y musgo en la base, que se
@@ -315,13 +317,14 @@ class TreeBark(sculpt.Material):
     specular = 0.03
 
     def color(self, p):
-        grain = sculpt.fbm(p * (1.6, 0.18, 1.6))
-        wood = sculpt.mix((0.17, 0.11, 0.07), (0.40, 0.29, 0.18), grain)
-        moss = sculpt.smoothstep(4.5, 0.5, p.y + 3.0 * sculpt.noise(p * 0.5))
-        return sculpt.mix(wood, (0.24, 0.40, 0.14), moss * 0.8)
+        grain = claymarch.fbm(p * (1.6, 0.18, 1.6))
+        wood = claymarch.mix((0.17, 0.11, 0.07), (0.40, 0.29, 0.18), grain)
+        edge = p.y + 3.0 * claymarch.noise(p * 0.5)
+        moss = claymarch.smoothstep(4.5, 0.5, edge)
+        return claymarch.mix(wood, (0.24, 0.40, 0.14), moss * 0.8)
 
     def bump(self, p):
-        return 0.03 * sculpt.fbm(p * (3.0, 0.3, 3.0))
+        return 0.03 * claymarch.fbm(p * (3.0, 0.3, 3.0))
 
 
 TREE_GAP = 22  # distancia entre un árbol y el siguiente
@@ -335,29 +338,29 @@ def in_the_woods(c):
     step da 1 si está más lejos que CLEARING del origen (donde está la
     rama), y 0 si no.
     """
-    return sculpt.step(CLEARING, sculpt.length(c))
+    return claymarch.step(CLEARING, claymarch.length(c))
 
 
-class Tree(sculpt.Model):
+class Tree(claymarch.Model):
     """Un tronco enorme, de radio 2.
 
     Sube hasta salirse del cuadro: no se le ve la copa, y eso lo hace
     parecer más alto.
     """
 
-    trunk = sculpt.Capsule((0, -1, 0), (0, 45, 0), 2.0, 1.6)
+    trunk = claymarch.Capsule((0, -1, 0), (0, 45, 0), 2.0, 1.6)
     # La base se ensancha: un cono sin punta fundido con el tronco.
-    flare = sculpt.CutCone(3.8, 1.8, 6.0, position=(0, 2.4, 0))
+    flare = claymarch.CutCone(3.8, 1.8, 6.0, position=(0, 2.4, 0))
     # Dos raíces que asoman.
-    root_1 = sculpt.Ellipsoid(1.2, 1.0, 2.6, position=(1.8, 0, 3.0))
-    root_2 = sculpt.Ellipsoid(2.4, 0.9, 1.2, position=(-3.2, 0, 0.8))
+    root_1 = claymarch.Ellipsoid(1.2, 1.0, 2.6, position=(1.8, 0, 3.0))
+    root_2 = claymarch.Ellipsoid(2.4, 0.9, 1.2, position=(-3.2, 0, 0.8))
 
     smooth = 1.4
     material = TreeBark
 
 
 # ----------------------------------------------------------------- los hongos
-class GlowCap(sculpt.Material):
+class GlowCap(claymarch.Material):
     """El sombrero: turquesa con luz propia.
 
     glow es cuánta luz emite (0 = nada); como método de (p, t) puede latir
@@ -368,35 +371,36 @@ class GlowCap(sculpt.Material):
 
     def color(self, p):
         # Más claro hacia arriba del sombrero, con unas manchas.
-        top = sculpt.smoothstep(0.30, 0.48, p.y)
-        return sculpt.mix(
+        top = claymarch.smoothstep(0.30, 0.48, p.y)
+        return claymarch.mix(
             (0.10, 0.62, 0.60), (0.55, 1.00, 0.85),
-            top * 0.7 + sculpt.noise(p * 14) * 0.3,
+            top * 0.7 + claymarch.noise(p * 14) * 0.3,
         )
 
     def glow(self, p, t):
-        return 0.50 + 0.18 * sculpt.sin(t * 1.8 + p.x * 3.0)  # late despacio
+        # Late despacio.
+        return 0.50 + 0.18 * claymarch.sin(t * 1.8 + p.x * 3.0)
 
 
-stem_white = sculpt.Material(
+stem_white = claymarch.Material(
     color=(0.86, 0.90, 0.78), specular=0.10, glow=0.25
 )
 
 
-class Mushroom(sculpt.Model):
+class Mushroom(claymarch.Model):
     """Un hongo, modelado con el pie en el origen. size lo agranda."""
 
     # El sombrero: una cúpula. Es un elipsoide al que se le cava otro más
     # chato por debajo, así queda hueco y con borde.
-    cap = sculpt.Ellipsoid(0.22, 0.16, 0.22, position=(0.02, 0.36, 0))
-    hollow = sculpt.Ellipsoid(
+    cap = claymarch.Ellipsoid(0.22, 0.16, 0.22, position=(0.02, 0.36, 0))
+    hollow = claymarch.Ellipsoid(
         0.24, 0.12, 0.24,
         position=(0.02, 0.25, 0),
         carve=True,
     )
     # El tallo: una cápsula que se afina hacia arriba. Va después del hueco
     # para que el hueco no se lo coma.
-    stem = sculpt.Capsule(
+    stem = claymarch.Capsule(
         (0, -0.05, 0), (0.02, 0.34, 0), 0.055, 0.035,
         material=stem_white,
     )
@@ -406,7 +410,7 @@ class Mushroom(sculpt.Model):
     bounds = ((0, 0.22, 0), 0.5)  # una esfera que lo contiene
 
 
-class Mushrooms(sculpt.Model):
+class Mushrooms(claymarch.Model):
     """Los hongos de la lista SHROOMS, del lado que ve la cámara."""
 
     parts = [
@@ -416,7 +420,7 @@ class Mushrooms(sculpt.Model):
 
 
 # -------------------------------------------------------------- el sotobosque
-class FrondGreen(sculpt.Material):
+class FrondGreen(claymarch.Material):
     """Verde de helecho.
 
     stripes dibuja rayas a lo largo de cada hoja: de lejos se leen como los
@@ -426,13 +430,13 @@ class FrondGreen(sculpt.Material):
     specular = 0.10
 
     def color(self, p):
-        leaflets = sculpt.stripes(p.y + 0.3 * abs(p.x), 0.035)
-        return sculpt.mix(
+        leaflets = claymarch.stripes(p.y + 0.3 * abs(p.x), 0.035)
+        return claymarch.mix(
             (0.13, 0.36, 0.12), (0.34, 0.60, 0.20), 0.25 + 0.6 * leaflets
         )
 
 
-class Frond(sculpt.Model):
+class Frond(claymarch.Model):
     """Una hoja de helecho: larga, con el pie en el origen, arqueada.
 
     length es el largo. rotation = (cuánto se vuelca hacia afuera, hacia
@@ -445,7 +449,7 @@ class Frond(sculpt.Model):
     def parts(self):
         half = self.length / 2
         return [
-            sculpt.Ellipsoid(
+            claymarch.Ellipsoid(
                 0.11, half, 0.02,
                 position=(0, half, 0),
                 bend=(self.droop, 0),
@@ -453,7 +457,7 @@ class Frond(sculpt.Model):
         ]
 
 
-class Fern(sculpt.Model):
+class Fern(claymarch.Model):
     """Una mata de helecho: seis hojas que salen del centro hacia afuera.
 
     Cada una con otro largo y otra caída, repartidas en ronda. Modelada con
@@ -471,35 +475,35 @@ class Fern(sculpt.Model):
     bounds = ((0, 0.45, 0), 1.35)  # una esfera que contiene la mata
 
 
-class Stone(sculpt.Material):
+class Stone(claymarch.Material):
     """Piedra con musgo arriba (donde p.y es alto)."""
 
     specular = 0.06
 
     def color(self, p):
-        rock = sculpt.mix(
-            (0.30, 0.29, 0.25), (0.52, 0.50, 0.42), sculpt.fbm(p * 4)
+        rock = claymarch.mix(
+            (0.30, 0.29, 0.25), (0.52, 0.50, 0.42), claymarch.fbm(p * 4)
         )
-        edge = p.y + 0.25 * (sculpt.noise(p * 5) - 0.5)
-        moss = sculpt.smoothstep(0.05, 0.30, edge)
-        return sculpt.mix(rock, (0.26, 0.44, 0.15), moss * 0.9)
+        edge = p.y + 0.25 * (claymarch.noise(p * 5) - 0.5)
+        moss = claymarch.smoothstep(0.05, 0.30, edge)
+        return claymarch.mix(rock, (0.26, 0.44, 0.15), moss * 0.9)
 
     def bump(self, p):
-        return 0.012 * sculpt.fbm(p * 9)
+        return 0.012 * claymarch.fbm(p * 9)
 
 
-class Rock(sculpt.Model):
+class Rock(claymarch.Model):
     """Una piedra redondeada: dos bultos fundidos."""
 
-    big = sculpt.Ellipsoid(0.62, 0.42, 0.50)
-    small = sculpt.Ellipsoid(0.40, 0.30, 0.44, position=(0.36, -0.04, 0.12))
+    big = claymarch.Ellipsoid(0.62, 0.42, 0.50)
+    small = claymarch.Ellipsoid(0.40, 0.30, 0.44, position=(0.36, -0.04, 0.12))
 
     smooth = 0.18
     material = Stone
     bounds = ((0.12, 0, 0.04), 0.95)
 
 
-class Undergrowth(sculpt.Model):
+class Undergrowth(claymarch.Model):
     """Lo que crece entre la rama y los árboles.
 
     on_ground(x, z) apoya cada cosa sobre las lomas; x y z negativos es
@@ -566,7 +570,7 @@ class ForestCaterpie(Caterpie):
     position = (0.04, BRANCH_TOP + 0.17, 0)
 
 
-class Forest(sculpt.Scene):
+class Forest(claymarch.Scene):
     branch = Branch
     # Los árboles: UN solo Tree repetido en una grilla sin fin (ver TREE_GAP
     # y CLEARING más arriba). Cuanto más lejos, más los tapa la bruma.
@@ -590,10 +594,12 @@ class Forest(sculpt.Scene):
 
     # top: una altura que las lomas nunca pasan (terrain llega a 0.88). Por
     # encima de eso el piso no calcula las lomas, y dibuja más rápido.
-    ground = sculpt.Ground(height=terrain, material=Moss, top=0.9)
+    ground = claymarch.Ground(height=terrain, material=Moss, top=0.9)
     background = (SKY_TOP, SKY_HORIZON)
-    camera = sculpt.Camera(
+    camera = claymarch.Camera(
         target=(0, 1.55, -0.6), distance=4.6, yaw=50, pitch=9
     )
-    light = sculpt.Light(direction=SUN_FROM, color=SUN_COLOR, intensity=1.15)
+    light = claymarch.Light(
+        direction=SUN_FROM, color=SUN_COLOR, intensity=1.15
+    )
     ambient = SHADE_COLOR

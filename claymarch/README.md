@@ -1,10 +1,10 @@
-# sculpt
+# claymarch
 
 Describe 3D scenes in Python and translate them to a GLSL shader (raymarching
 of signed distance functions).
 
 ```bash
-python -m sculpt my_scene.py
+python -m claymarch my_scene.py
 ```
 
 Open `http://localhost:8770`. When the file is saved, the page updates itself.
@@ -32,24 +32,24 @@ Open `http://localhost:8770`. When the file is saved, the page updates itself.
 ## Minimal example
 
 ```python
-import sculpt
+import claymarch
 
 
-class Red(sculpt.Material):
+class Red(claymarch.Material):
     color = (0.9, 0.3, 0.2)
 
 
-class Ball(sculpt.Model):
-    body = sculpt.Sphere(0.5, position=(0, 0.5, 0))
+class Ball(claymarch.Model):
+    body = claymarch.Sphere(0.5, position=(0, 0.5, 0))
 
     material = Red
 
     def position(self, t):
         # It bounces.
-        return (0, 0.3 * abs(sculpt.sin(t * 3)), 0)
+        return (0, 0.3 * abs(claymarch.sin(t * 3)), 0)
 
 
-class MyScene(sculpt.Scene):
+class MyScene(claymarch.Scene):
     ball = Ball
 ```
 
@@ -67,13 +67,13 @@ the scene together.
 | `Material` | `p` (position), and `t` if it asks for a second parameter | draw on the object |
 
 ```python
-class Thing(sculpt.Model):
+class Thing(claymarch.Model):
     size = 1.0  # a fixed value
 
 
-class Thing(sculpt.Model):
+class Thing(claymarch.Model):
     def size(self, t):  # or a method of time
-        return 1 + 0.1 * sculpt.sin(t * 4)
+        return 1 + 0.1 * claymarch.sin(t * 4)
 ```
 
 Coordinate system: `y` is up, `z` points towards the camera by default, `x`
@@ -102,8 +102,8 @@ After its own measures, every shape accepts the [properties](#properties) as
 keyword arguments:
 
 ```python
-sculpt.Torus(0.15, 0.03, rotation=(90, 0, 0), position=(0.44, 0, 0))
-sculpt.Box(
+claymarch.Torus(0.15, 0.03, rotation=(90, 0, 0), position=(0.44, 0, 0))
+claymarch.Box(
     0.08, 0.7, 0.08,
     position=(0.4, 0.35, 0.25),
     symmetry="x",
@@ -147,7 +147,7 @@ Any of them can be a function of time:
 
 ```python
 def wobble(size, i):
-    return lambda t: size * (1 + 0.03 * sculpt.sin(t * 3 - i * 0.9))
+    return lambda t: size * (1 + 0.03 * claymarch.sin(t * 3 - i * 0.9))
 
 
 ball = Ball(size=wobble(0.88, 1))
@@ -160,16 +160,16 @@ ball = Ball(size=wobble(0.88, 1))
 A thing made of parts, described as a class.
 
 ```python
-class Lamp(sculpt.Model):
-    base = sculpt.Cylinder(0.3, 0.06, position=(0, 0.03, 0))
-    pole = sculpt.Capsule((0, 0, 0), (0, 1, 0), 0.03)
-    shade = sculpt.CutCone(0.25, 0.12, 0.3, position=(0, 1.1, 0))
+class Lamp(claymarch.Model):
+    base = claymarch.Cylinder(0.3, 0.06, position=(0, 0.03, 0))
+    pole = claymarch.Capsule((0, 0, 0), (0, 1, 0), 0.03)
+    shade = claymarch.CutCone(0.25, 0.12, 0.3, position=(0, 1.1, 0))
 
     smooth = 0.02
     material = brass
 
     def rotation(self, t):
-        return (0, 0, 4 * sculpt.sin(t * 2))
+        return (0, 0, 4 * claymarch.sin(t * 2))
 ```
 
 ### Parts
@@ -179,7 +179,7 @@ Every class attribute that is a shape, a model or a drawing becomes a part,
 without parentheses:
 
 ```python
-class Desk(sculpt.Model):
+class Desk(claymarch.Model):
     table = Table  # the class itself
     lamp = Lamp(position=(0.3, 0.75, 0))  # or an instance, to change something
 ```
@@ -205,19 +205,19 @@ Parts are applied in the order they are written, and each one says what it
 does to what came before it:
 
 ```python
-class Mug(sculpt.Model):
+class Mug(claymarch.Model):
     # The first one: the base.
-    body = sculpt.Cylinder(0.3, 0.6, rounding=0.03)
+    body = claymarch.Cylinder(0.3, 0.6, rounding=0.03)
     # Drawn on what came before.
     logo = Badge(patch=(0, 0, 0.3))
     # Cut out of what came before.
-    hollow = sculpt.Cylinder(
+    hollow = claymarch.Cylinder(
         0.26, 0.6,
         position=(0, 0.06, 0),
         carve=0.01,
     )
     # Added, blended.
-    handle = sculpt.Torus(
+    handle = claymarch.Torus(
         0.15, 0.03,
         rotation=(90, 0, 0),
         position=(0.44, 0, 0),
@@ -246,13 +246,13 @@ Any class attribute is a parameter that can be changed when the model is
 used. Properties read it from a method:
 
 ```python
-class Lamp(sculpt.Model):
-    pole = sculpt.Capsule((0, 0, 0), (0, 1, 0), 0.03)
+class Lamp(claymarch.Model):
+    pole = claymarch.Capsule((0, 0, 0), (0, 1, 0), 0.03)
 
     tilt = 0  # how far it leans, in degrees
 
     def rotation(self, t):
-        return (0, 0, self.tilt + 4 * sculpt.sin(t * 2))
+        return (0, 0, self.tilt + 4 * claymarch.sin(t * 2))
 
 
 lamp = Lamp(tilt=20)
@@ -270,8 +270,8 @@ To change parts, inherit and redefine only what changes:
 
 ```python
 class TallLamp(Lamp):
-    pole = sculpt.Capsule((0, 0, 0), (0, 1.6, 0), 0.03)
-    shade = sculpt.CutCone(0.25, 0.12, 0.3, position=(0, 1.7, 0))
+    pole = claymarch.Capsule((0, 0, 0), (0, 1.6, 0), 0.03)
+    shade = claymarch.CutCone(0.25, 0.12, 0.3, position=(0, 1.7, 0))
 ```
 
 ---
@@ -284,22 +284,22 @@ defined on its own, without knowing what it goes on; the model that uses it
 says where.
 
 ```python
-class Badge(sculpt.Drawing):
-    rim = sculpt.Disc(0.20, material=yellow)
+class Badge(claymarch.Drawing):
+    rim = claymarch.Disc(0.20, material=yellow)
     # Written later: it ends up on top.
-    center = sculpt.Disc(0.13, material=black)
+    center = claymarch.Disc(0.13, material=black)
     # Shifted from the center of the drawing.
-    dot = sculpt.Disc(0.045, material=white, at=(-0.04, 0.06, 0.05))
+    dot = claymarch.Disc(0.045, material=white, at=(-0.04, 0.06, 0.05))
 
 
-class Mug(sculpt.Model):
-    body = sculpt.Cylinder(0.3, 0.6, rounding=0.03)
+class Mug(claymarch.Model):
+    body = claymarch.Cylinder(0.3, 0.6, rounding=0.03)
     logo = Badge(patch=(0, 0, 0.3))
 
 
-class Buoy(sculpt.Model):
-    body = sculpt.Ellipsoid(0.39, 0.33, 0.34)
-    ring = sculpt.Disc(
+class Buoy(claymarch.Model):
+    body = claymarch.Ellipsoid(0.39, 0.33, 0.34)
+    ring = claymarch.Disc(
         0.12, inner=0.08,
         material=white,
         patch=(0.36, 0, -0.10),
@@ -340,30 +340,31 @@ Used as a part of a model, `Disc` and `Drawing` accept:
 ## Material
 
 ```python
-class Clay(sculpt.Material):
+class Clay(claymarch.Material):
     specular = 0.30
 
     def color(self, p):
-        base = sculpt.mix(
-            (0.26, 0.66, 0.58), (0.34, 0.76, 0.64), sculpt.noise(p * 5.0)
+        base = claymarch.mix(
+            (0.26, 0.66, 0.58), (0.34, 0.76, 0.64), claymarch.noise(p * 5.0)
         )
-        specks = sculpt.smoothstep(0.70, 0.76, sculpt.noise(p * 38.0))
-        return sculpt.mix(base, (0.16, 0.45, 0.42), 0.7 * specks)
+        specks = claymarch.smoothstep(0.70, 0.76, claymarch.noise(p * 38.0))
+        return claymarch.mix(base, (0.16, 0.45, 0.42), 0.7 * specks)
 
     def bump(self, p):
-        return 0.0022 * sculpt.fbm(p * 60.0) + 0.003 * sculpt.noise(p * 14.0)
+        fine = 0.0022 * claymarch.fbm(p * 60.0)
+        return fine + 0.003 * claymarch.noise(p * 14.0)
 ```
 
 For plain materials the values are enough, on the class or when creating it:
 
 ```python
-class Paint(sculpt.Material):
+class Paint(claymarch.Material):
     color = (0.42, 0.80, 0.30)
 
 
 green = Paint()
 yellow = Paint(color=(1, 0.85, 0.15))
-dark = sculpt.Material(color=(0.10, 0.10, 0.13), specular=0.9, shininess=80)
+dark = claymarch.Material(color=(0.10, 0.10, 0.13), specular=0.9, shininess=80)
 ```
 
 | Property | Default | What it is |
@@ -390,9 +391,9 @@ material, before it is placed. All the parts of a model painted by its
 A method can also ask for time:
 
 ```python
-class Pulse(sculpt.Material):
+class Pulse(claymarch.Material):
     def glow(self, p, t):
-        return 0.5 + 0.5 * sculpt.sin(t * 4)
+        return 0.5 + 0.5 * claymarch.sin(t * 4)
 ```
 
 ---
@@ -407,8 +408,8 @@ why these functions are used instead of the ones in `math`.
 
 | Name | What it is |
 |---|---|
-| `sculpt.T` | time, in seconds (the same as the `t` of the methods) |
-| `sculpt.P` | the position on the object (the same as the `p` of the methods) |
+| `claymarch.T` | time, in seconds (the same as the `t` of the methods) |
+| `claymarch.P` | the position on the object (the same as the `p` of the methods) |
 | `p.x`, `p.y`, `p.z` | one component of the position |
 
 ### Operations
@@ -418,7 +419,7 @@ become vectors on their own.
 
 ### Functions
 
-All of them are used as `sculpt.sin(...)`.
+All of them are used as `claymarch.sin(...)`.
 
 | Function | Returns |
 |---|---|
@@ -441,12 +442,12 @@ All of them are used as `sculpt.sin(...)`.
 ### Recipes
 
 ```python
-0.1 * abs(sculpt.sin(t * 3))  # bounce
-12 * sculpt.sin(t * 3)  # sway (in degrees, for rotation)
-sculpt.mix(color_a, color_b, sculpt.noise(p * 5))  # soft color variation
-sculpt.smoothstep(0.70, 0.76, sculpt.noise(p * 38))  # spots (a 0..1 mask)
-sculpt.mix(color_a, color_b, sculpt.stripes(p.x, 0.03))  # stripes
-sculpt.smoothstep(0.0, 0.2, p.y)  # gradient from the bottom up
+0.1 * abs(claymarch.sin(t * 3))  # bounce
+12 * claymarch.sin(t * 3)  # sway (in degrees, for rotation)
+claymarch.mix(color_a, color_b, claymarch.noise(p * 5))  # soft color variation
+claymarch.smoothstep(0.70, 0.76, claymarch.noise(p * 38))  # spots
+claymarch.mix(color_a, color_b, claymarch.stripes(p.x, 0.03))  # stripes
+claymarch.smoothstep(0.0, 0.2, p.y)  # gradient from the bottom up
 ```
 
 ---
@@ -454,12 +455,12 @@ sculpt.smoothstep(0.0, 0.2, p.y)  # gradient from the bottom up
 ## Scene, Camera, Light, Ground
 
 ```python
-class DeskScene(sculpt.Scene):
+class DeskScene(claymarch.Scene):
     desk = Desk  # every model or shape is drawn
-    camera = sculpt.Camera(
+    camera = claymarch.Camera(
         target=(0, 0.75, 0), distance=4.2, yaw=25, pitch=12
     )
-    light = sculpt.Light(direction=(0.6, 0.8, 0.5))
+    light = claymarch.Light(direction=(0.6, 0.8, 0.5))
 ```
 
 A scene with no models yet also works: it shows the ground and the sky.
@@ -478,7 +479,7 @@ Useful to start a file from scratch with the viewer already open.
 |---|---|
 | `Camera` | `target=(0, 0.5, 0)` (the point it looks at), `distance=4.0`, `yaw=25` (turn around that point, sideways), `pitch=15` (elevation: 0 looks straight on, higher looks from above), `lens=2.0` (larger = more zoom, less perspective) |
 | `Light` | `direction=(0.5, 0.7, 0.5)` (where it comes from), `color=(1.0, 0.95, 0.85)`, `intensity=1.0` |
-| `Ground` | `height=0.0`, `material=None`. `height` can also be a function of the position, for a hilly ground: `Ground(height=lambda p: 0.5 * sculpt.noise(p * 0.2))` (use `p.x` and `p.z`, gentle slopes). With hills, `top=` is an optional speed-up: a height the hills never exceed; above it they are not computed. If it is too low, the hilltops look cut off |
+| `Ground` | `height=0.0`, `material=None`. `height` can also be a function of the position, for a hilly ground: `Ground(height=lambda p: 0.5 * claymarch.noise(p * 0.2))` (use `p.x` and `p.z`, gentle slopes). With hills, `top=` is an optional speed-up: a height the hills never exceed; above it they are not computed. If it is too low, the hilltops look cut off |
 
 Besides the main light, the render adds on its own: sky light, bounce from
 the ground, soft shadows and ambient occlusion. They are not configurable.
@@ -488,7 +489,7 @@ the ground, soft shadows and ambient occlusion. They are not configurable.
 ## The viewer
 
 ```bash
-python -m sculpt file.py [--port 8770] [--out folder] [--once]
+python -m claymarch file.py [--port 8770] [--out folder] [--once]
 ```
 
 - It takes the last `Scene` subclass defined in the file.
@@ -513,7 +514,7 @@ in red over the page.
 ### Exporting a video
 
 ```bash
-python -m sculpt file.py --video out.mp4 [--size 1080x1920] [--seconds 8] [--fps 30] [--zoom 1.0] [--sway 0]
+python -m claymarch file.py --video out.mp4 [--size 1080x1920] [--seconds 8] [--fps 30] [--zoom 1.0] [--sway 0]
 ```
 
 It opens a browser tab that draws the video and saves it to `out.mp4`. By
@@ -538,7 +539,7 @@ encoding (MP4 with H.264 if supported, WebM otherwise).
 
 ## Common pitfalls
 
-- **A name sculpt does not know is not an error.** `base = GREEN` in a
+- **A name claymarch does not know is not an error.** `base = GREEN` in a
   `Material` does not paint it: the color is called `color`. And if a class
   defines the same property twice (`rotation = ...` and further down
   `def rotation`), the last one wins.
@@ -548,8 +549,8 @@ encoding (MP4 with H.264 if supported, WebM otherwise).
   the same way: `size`, `rotation`, `position`, `bend`, `symmetry`.
 - **`if` does not work with formulas.** `if p.y > 0:` fails because `p.y` is
   not a number. Use `step` or `smoothstep` together with `mix` instead.
-- **Neither do `min`, `max` and `math.sin`.** Use `sculpt.minimum`,
-  `sculpt.maximum`, `sculpt.sin` and `sculpt.cos`.
+- **Neither do `min`, `max` and `math.sin`.** Use `claymarch.minimum`,
+  `claymarch.maximum`, `claymarch.sin` and `claymarch.cos`.
 - **Color does not blend in a smooth union.** The shape does; the material
   changes abruptly at the edge. For a color transition, paint everything
   with a single material and do the blend inside `color` with `p`.
@@ -577,10 +578,10 @@ method: it is called on the shape or the model.
 ```python
 def away_from_center(c):
     # c is the center of the cell: no copies closer than 14 to the origin.
-    return sculpt.step(14, sculpt.length(c))
+    return claymarch.step(14, claymarch.length(c))
 
 
-class Hall(sculpt.Scene):
+class Hall(claymarch.Scene):
     columns = Column().repeat(
         x=22, z=22,
         jitter=2.0,
@@ -615,10 +616,10 @@ class Hall(sculpt.Scene):
 What two shapes have in common is written with `&`, inside a `parts` list:
 
 ```python
-class Lens(sculpt.Model):
+class Lens(claymarch.Model):
     parts = [
-        sculpt.Sphere(0.5, position=(0.3, 0, 0))
-        & sculpt.Sphere(0.5, position=(-0.3, 0, 0))
+        claymarch.Sphere(0.5, position=(0.3, 0, 0))
+        & claymarch.Sphere(0.5, position=(-0.3, 0, 0))
     ]
 ```
 
@@ -631,12 +632,12 @@ A part written as an attribute cannot read `self`. If its measures depend on
 a parameter of the model, `parts` is written as a method:
 
 ```python
-class Plank(sculpt.Model):
+class Plank(claymarch.Model):
     length = 1.0
 
     def parts(self):
         half = self.length / 2
-        return [sculpt.Box(0.2, self.length, 0.04, position=(0, half, 0))]
+        return [claymarch.Box(0.2, self.length, 0.04, position=(0, half, 0))]
 ```
 
 `parts` can also receive `t`, like any property.

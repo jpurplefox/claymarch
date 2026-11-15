@@ -131,7 +131,7 @@ window.addEventListener('keydown', (e) => {
 });
 
 // ---------- video export ----------
-// Opened as ?record=1&w=1080&h=1920&seconds=8&fps=30 (python -m sculpt ... --video
+// Opened as ?record=1&w=1080&h=1920&seconds=8&fps=30 (python -m claymarch ... --video
 // does it). Two passes: first every frame is drawn at its exact time, however
 // long each one takes; then the saved frames are played back at real speed
 // into a recorder, and the finished file is sent to the Python server.
