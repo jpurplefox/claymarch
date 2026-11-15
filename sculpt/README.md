@@ -1,427 +1,452 @@
 # sculpt
 
-Describir escenas 3D en Python y traducirlas a un shader GLSL (raymarching de
-funciones de distancia).
+Describe 3D scenes in Python and translate them to a GLSL shader (raymarching
+of signed distance functions).
 
 ```bash
-python -m sculpt examples/caterpie.py
+python -m sculpt my_scene.py
 ```
 
-Abrí `http://localhost:8770`. Al guardar el archivo, la página se actualiza sola.
+Open `http://localhost:8770`. When the file is saved, the page updates itself.
 
 ---
 
-## Índice
+## Contents
 
-1. [Ejemplo mínimo](#ejemplo-mínimo)
-2. [La regla central](#la-regla-central)
-3. [Formas](#formas)
-4. [Transformar, modificar y combinar](#transformar-modificar-y-combinar)
+1. [Minimal example](#minimal-example)
+2. [The central rule](#the-central-rule)
+3. [Shapes](#shapes)
+4. [Properties](#properties)
 5. [Model](#model)
-6. [Material](#material)
-7. [Expresiones](#expresiones)
-8. [Scene, Camera, Light, Ground](#scene-camera-light-ground)
-9. [El visor](#el-visor)
-10. [Cosas que suelen confundir](#cosas-que-suelen-confundir)
-11. [Lo que todavía no existe](#lo-que-todavía-no-existe)
+6. [Drawings on a surface](#drawings-on-a-surface)
+7. [Material](#material)
+8. [Expressions](#expressions)
+9. [Scene, Camera, Light, Ground](#scene-camera-light-ground)
+10. [The viewer](#the-viewer)
+11. [Common pitfalls](#common-pitfalls)
+12. [What cannot be declared](#what-cannot-be-declared)
+13. [What does not exist yet](#what-does-not-exist-yet)
 
 ---
 
-## Ejemplo mínimo
+## Minimal example
 
 ```python
-from sculpt import *
+import sculpt
 
-class Red(Material):
+
+class Red(sculpt.Material):
     color = (0.9, 0.3, 0.2)
 
-class Ball(Model):
-    body = Sphere(0.5).move(y=0.5)
+
+class Ball(sculpt.Model):
+    body = sculpt.Sphere(0.5, position=(0, 0.5, 0))
+
     material = Red
 
-    def position(self, t):                  # rebota
-        return (0, 0.3 * abs(sin(t * 3)), 0)
+    def position(self, t):
+        # It bounces.
+        return (0, 0.3 * abs(sculpt.sin(t * 3)), 0)
 
-class MyScene(Scene):
+
+class MyScene(sculpt.Scene):
     ball = Ball
 ```
 
-## La regla central
+Everything is described with classes and properties: which pieces there are,
+where each one goes and what it is made of. Nothing has to be called to put
+the scene together.
 
-**Cada propiedad es un valor, o un método que devuelve el valor.**
+## The central rule
 
-| En un...   | el método recibe         | para                         |
-|------------|--------------------------|------------------------------|
-| `Model`    | `t` (tiempo en segundos) | animar                       |
-| `Material` | `p` (posición), y `t` si pide un segundo parámetro | dibujar sobre el objeto |
+**Every property is a value, or a method that returns the value.**
+
+| In a...    | the method receives     | to                 |
+|------------|-------------------------|--------------------|
+| `Model`    | `t` (time in seconds)   | animate            |
+| `Material` | `p` (position), and `t` if it asks for a second parameter | draw on the object |
 
 ```python
-class Thing(Model):
-    size = 1.0                       # valor fijo
+class Thing(sculpt.Model):
+    size = 1.0  # a fixed value
 
-class Thing(Model):
-    def size(self, t):               # o método del tiempo
-        return 1 + 0.1 * sin(t * 4)
+
+class Thing(sculpt.Model):
+    def size(self, t):  # or a method of time
+        return 1 + 0.1 * sculpt.sin(t * 4)
 ```
 
-Sistema de coordenadas: `y` es arriba, `z` apunta hacia la cámara por defecto,
-`x` a la derecha. Las unidades son arbitrarias; el ejemplo mide ~1.5 de alto.
-Los ángulos van **en grados**.
+Coordinate system: `y` is up, `z` points towards the camera by default, `x`
+to the right. Units are arbitrary; the examples here are about 1 unit tall.
+Angles are **in degrees**.
 
 ---
 
-## Formas
+## Shapes
 
-Todas quedan centradas en el origen salvo que se indique.
+All of them are centered at the origin unless noted.
 
-| Forma | Parámetros (valor por defecto) | Notas |
+| Shape | Parameters (default) | Notes |
 |---|---|---|
 | `Sphere(radius=0.5)` | | |
-| `Ellipsoid(rx=0.5, ry=0.5, rz=0.5)` | un radio por eje | la base para cuerpos orgánicos |
-| `Box(width=1, height=1, depth=1, rounding=0)` | tamaños totales | `rounding` redondea aristas sin agrandar |
-| `Capsule(start=(0,0,0), end=(0,1,0), radius=0.2, radius2=None)` | segmento grueso | con `radius2` se afina hacia `end` (colas, brazos) |
-| `Curve(start=(0,0,0), control=(0,1,0), end=(1,1,0), radius=0.2, radius2=None)` | línea gruesa curva | un arco de parábola de `start` a `end`; `control` es hacia dónde se comba (la curva no pasa por ahí). Con `radius2` se afina (colas, cuernos, tentáculos) |
+| `Ellipsoid(rx=0.5, ry=0.5, rz=0.5)` | one radius per axis | the base for rounded, irregular volumes |
+| `Box(width=1, height=1, depth=1, rounding=0)` | full sizes | `rounding` rounds the edges without growing the box |
+| `Capsule(start=(0,0,0), end=(0,1,0), radius=0.2, radius2=None)` | a thick segment | with `radius2` it tapers towards `end` |
+| `Curve(start=(0,0,0), control=(0,1,0), end=(1,1,0), radius=0.2, radius2=None)` | a thick curved line | a parabola arc from `start` to `end`; `control` is where it bulges towards (the curve does not pass through it). With `radius2` it tapers |
 | `Cylinder(radius=0.5, height=1, rounding=0)` | vertical | |
-| `Torus(radius=0.5, thickness=0.15)` | acostado (eje vertical) | |
-| `Cone(radius=0.3, height=1)` | base en el origen, punta hacia arriba | la base es redondeada |
-| `CutCone(radius=0.5, radius2=0.25, height=1, rounding=0)` | cono sin punta, vertical y centrado | `radius` es abajo, `radius2` arriba; las dos caras son planas. `rounding` redondea aristas sin agrandar |
+| `Torus(radius=0.5, thickness=0.15)` | lying flat (vertical axis) | |
+| `Cone(radius=0.3, height=1)` | base at the origin, tip pointing up | the base is rounded |
+| `CutCone(radius=0.5, radius2=0.25, height=1, rounding=0)` | a cone without its tip, vertical and centered | `radius` is the bottom, `radius2` the top; both faces are flat. `rounding` rounds the edges without growing it |
 
-## Transformar, modificar y combinar
-
-Todos los métodos devuelven una forma nueva, así que se encadenan:
-
-```python
-Cone(0.16, 0.45).rotate_z(-25).move(x=0.25, y=1.32).mirror("x")
-```
-
-Se aplican **en el orden en que se leen**: primero rota, después mueve, después espeja.
-
-### Transformaciones
-
-| Método | Qué hace |
-|---|---|
-| `.move(x=0, y=0, z=0)` | traslada. También acepta un punto: `.move((0.4, 0.1, 0.2))`, cómodo cuando el punto tiene nombre (`EYE_AT = (0.44, 0.06, 0.22)`) y se usa en varias formas |
-| `.rotate_x(degrees)` `.rotate_y(degrees)` `.rotate_z(degrees)` | rota alrededor de ese eje, pasando por el origen |
-| `.scale(factor)` | escala uniforme (un solo número) |
-| `.mirror(axis="x")` | simetría: lo que está del lado positivo se copia al negativo |
-| `.bend_x(degrees)` `.bend_z(degrees)` | curva una forma vertical: un giro alrededor de ese eje que crece con la altura (`degrees` por cada unidad de `y`). Para curvas suaves; con valores grandes la forma se deforma |
-
-| `.repeat(x=0, y=0, z=0, ...)` | copias de la forma en una grilla, al costo de una sola (ver abajo) |
-
-Para `mirror`, la forma tiene que estar del lado **positivo** del eje (`x > 0`).
-Se modela un ojo, una oreja o una pata, y se obtiene el par.
-
-#### Repetir
-
-`repeat` parte el espacio en celdas y pone una copia de la forma en cada una.
-La forma se calcula una sola vez, así que mil copias cuestan lo mismo que una.
+After its own measures, every shape accepts the [properties](#properties) as
+keyword arguments:
 
 ```python
-Sphere(0.3).repeat(x=1.2, limit=2)            # una fila de 5 bolitas, una cada 1.2
-
-Tree(radius=2).repeat(                        # un bosque sin fin
-    x=22, z=22,                               # un árbol cada 22, hacia los costados y hacia el fondo
-    jitter=2.3, size=(0.8, 1.5), spin=True,   # cada uno corrido, de otro tamaño y girado distinto
-    where=lambda c: step(14, length(c)),      # sin árboles a menos de 14 del origen
+sculpt.Torus(0.15, 0.03, rotation=(90, 0, 0), position=(0.44, 0, 0))
+sculpt.Box(
+    0.08, 0.7, 0.08,
+    position=(0.4, 0.35, 0.25),
+    symmetry="x",
 )
 ```
 
-| Opción | Qué hace |
-|---|---|
-| `x`, `y`, `z` | distancia entre copias en cada eje (0 = no se repite en ese eje) |
-| `limit` | cuántas copias a cada lado de la del medio (`limit=2` son 5); sin `limit` no terminan nunca |
-| `jitter` | cada copia se corre de su lugar una distancia al azar, hasta ese valor |
-| `size` | `(mínimo, máximo)`: cada copia sale de un tamaño al azar entre esos dos |
-| `spin` | `True` gira cada copia un ángulo al azar alrededor de la vertical |
-| `where` | función del centro de cada celda: si da más de 0.5 hay copia, si no la celda queda vacía |
-| `seed` | otro número da otro reparto del azar |
+---
 
-- **Cada copia tiene que entrar en su celda**, que mide la mitad de la distancia
-  hacia cada lado. Hay que contar el `jitter` y el tamaño máximo, y dejar un
-  margen de 0.1. Si no entra, se ve cortada en el borde de la celda.
-- La forma se repite alrededor del origen: hay una copia en el origen, otra a
-  una distancia, otra a dos. Un `.move()` después del `repeat` corre la grilla entera.
-- El azar es siempre el mismo para la misma celda: no cambia de un cuadro a otro.
-- Todas las copias se animan igual y llevan la misma textura.
+## Properties
 
-### Modificadores
+They are the same for a shape and for a `Model`. On a shape they are keyword
+arguments; on a `Model` they are class attributes (or keyword arguments when
+it is used: `Lamp(position=(1, 0, 0))`).
 
-| Método | Qué hace |
-|---|---|
-| `.round(radius)` | infla la forma ese radio (redondea aristas, engorda) |
-| `.shell(thickness)` | la vuelve una cáscara hueca de ese grosor |
-| `.patch(drawing, at, lift=None)` | pega un dibujo sobre la superficie, sin que sobresalga (un ojo, un anillo, una mancha). `drawing` es un `Disc` o un `Drawing`; `at` es un punto sobre la superficie (ver "Dibujos sobre una superficie") |
-| `.paint(material)` | le asigna un material (instancia o clase) |
-
-### Dibujos sobre una superficie
-
-Para un ojo, un anillo o una mancha que no sobresalga: en vez de apoyar otra
-forma encima, se pega un dibujo sobre la superficie. El dibujo se define solo,
-sin saber sobre qué va, y la forma lo ubica con `patch`.
-
-```python
-class Eye(Drawing):
-    rim   = Disc(0.20, material=yellow)
-    pupil = Disc(0.13, material=black)                             # escrito después: queda encima
-    shine = Disc(0.045, material=white, at=(-0.04, 0.06, 0.05))    # corrido del centro del dibujo
-
-skull = Ellipsoid(0.50, 0.45, 0.50)
-eyes  = skull.patch(Eye(), at=(0.44, 0.06, 0.22)).mirror("x")     # at: un punto sobre el cráneo
-
-ring  = back.patch(Disc(0.12, inner=0.08, material=light_green), at=(0.36, 0, -0.10))
-```
-
-| | |
-|---|---|
-| `Disc(radius, inner=0, material=None, at=(0, 0, 0))` | una capa: un disco de ese radio. `inner` le deja un agujero en el medio (un anillo). `at` lo corre respecto del centro del dibujo. Usado suelto (sin `Drawing`) también acepta `lift=` |
-| `Drawing` | clase para heredar: sus atributos `Disc` son las capas, apiladas en el orden en que están escritas (la primera abajo). `Eye(size=0.8)` achica el dibujo entero. `lift` (por defecto `0.006`) es cuánto se levanta cada capa sobre la anterior: se pone en la clase (`lift = 0.004`) o al usarla (`Eye(lift=0.004)`) |
-| `forma.patch(drawing, at, lift=None)` | pega un `Disc` o un `Drawing` sobre `forma`, centrado en el punto `at`. `lift`, si se pasa, reemplaza al del dibujo |
-
-Dentro de un `Model` no hace falta llamar a `patch`: el dibujo se declara como
-una parte más, con `patch=` (el punto) y, si va de los dos lados, `symmetry=`.
-Se dibuja sobre las partes que están escritas antes que él:
-
-```python
-class Head(Model):
-    bone = Ellipsoid(0.50, 0.45, 0.50)
-    eyes = Eye(patch=(0.44, 0.06, 0.22), symmetry="x")        # sobre el hueso
-    ...
-
-class RoundSection(Model):
-    back = Ellipsoid(0.39, 0.33, 0.34)
-    ring = Disc(0.12, inner=0.08, material=light_green, patch=(0.36, 0, -0.10), symmetry="x")
-    ...
-```
-
-- Cada disco es un pedazo de la misma forma, apenas levantado: sigue la
-  superficie aunque la forma cambie de tamaño.
-- El resultado de `patch` es una forma aparte. Va al lado de la original y
-  **fuera** de cualquier unión con `smooth`, para que el borde quede nítido.
-- `at` tiene que estar sobre la superficie o muy cerca; si queda lejos, el
-  dibujo no aparece.
-- **Cuánto sobresale** lo decide `lift`. La primera capa se levanta `lift`
-  sobre la superficie, la segunda el doble, la tercera el triple. Más chico
-  se ve más pintado; más grande, más como una chapita apoyada. Si es
-  demasiado chico (menos de 0.002, más o menos) las capas muestran agujeros.
-
-### Combinaciones
-
-| Forma larga | Operador | Qué hace |
+| Property | Default | What it is |
 |---|---|---|
-| `a.union(b, smooth=0)` | `a \| b`, `a + b` | junta las dos |
-| `a.subtract(b, smooth=0)` | `a - b` | le quita `b` a `a` |
-| `a.intersect(b, smooth=0)` | `a & b` | deja solo lo que comparten |
-| `union(a, b, c, ..., smooth=0)` | | junta varias de una vez |
+| `material` | `None` | what it is painted with (a `Material`, instance or class) |
+| `size` | `1.0` | uniform scale |
+| `rotation` | `(0, 0, 0)` | degrees around x, y, z (applied in that order) |
+| `position` | `(0, 0, 0)` | where it goes |
+| `bend` | `(0, 0)` | curvature of a vertical piece: degrees per unit of height, `(around x, around z)`. For gentle curves; large values distort the piece |
+| `symmetry` | `None` | `"x"`, `"y"` or `"z"`: whatever is on the positive side of that axis is copied to the negative side. Model one of a pair and get both |
+| `carve` | `None` | the role of the piece inside a model: it is cut out (see [The role of each part](#the-role-of-each-part)) |
+| `join` | `None` | the role of the piece inside a model: it is added, blended |
 
-`smooth` es el radio de la transición: con `0` las formas se cortan en seco, con
-`0.1` se funden como plastilina. Es la herramienta principal para modelar
-criaturas. Los operadores no permiten `smooth`.
+**They are always applied in that order**, no matter how they are written:
+first it is painted, then `size`, `rotation`, `position`, `bend` and
+`symmetry`.
+
+- Painting comes before placing: textures stay glued to the piece and move
+  with it.
+- `size` and `rotation` act around the origin of the piece. For something to
+  turn from its base (a lever, a lid), model it with the base at the origin
+  and take it to its place with `position`.
+- `bend` comes after `position`: it curves the piece once placed, according
+  to its height.
+- For `symmetry`, the piece has to end up on the **positive** side of the
+  axis.
+
+Any of them can be a function of time:
+
+```python
+def wobble(size, i):
+    return lambda t: size * (1 + 0.03 * sculpt.sin(t * 3 - i * 0.9))
+
+
+ball = Ball(size=wobble(0.88, 1))
+```
 
 ---
 
 ## Model
 
-Una cosa hecha de partes, descrita como clase.
+A thing made of parts, described as a class.
 
 ```python
-class Sprout(Model):
-    stem = Capsule((0, 0, 0), (0, 0.22, 0), 0.025)       # cada forma es una parte
-    leaf = Ellipsoid(0.16, 0.025, 0.10).move(x=0.14, y=0.24)
+class Lamp(sculpt.Model):
+    base = sculpt.Cylinder(0.3, 0.06, position=(0, 0.03, 0))
+    pole = sculpt.Capsule((0, 0, 0), (0, 1, 0), 0.03)
+    shade = sculpt.CutCone(0.25, 0.12, 0.3, position=(0, 1.1, 0))
 
-    smooth = 0.03
-    material = LeafGreen
-    position = (0, 1.42, 0)
+    smooth = 0.02
+    material = brass
 
     def rotation(self, t):
-        return (0, 0, 12 * sin(t * 3))
+        return (0, 0, 4 * sculpt.sin(t * 2))
 ```
 
-### Partes
+### Parts
 
-Todo atributo de la clase que sea una forma o un modelo pasa a ser una parte, en
-el orden en que está escrito. Un modelo puede ser parte de otro, con o sin
-paréntesis:
+Every class attribute that is a shape, a model or a drawing becomes a part,
+**in the order it is written**. A model can be a part of another one, with or
+without parentheses:
 
 ```python
-class Critter(Model):
-    body = Body                      # la clase directamente
-    sprout = Sprout(size=0.8)        # o una instancia, para cambiarle algo
+class Desk(sculpt.Model):
+    table = Table  # the class itself
+    lamp = Lamp(position=(0.3, 0.75, 0))  # or an instance, to change something
 ```
 
-Si preferís una lista explícita, definí `parts = [a, b, c]` y se ignoran los
-demás atributos. Los atributos que empiezan con `_` nunca cuentan como parte.
+Attributes that start with `_` never count as parts.
 
-### Propiedades
+### Model properties
 
-| Propiedad | Por defecto | Qué es |
+Besides the common [properties](#properties), a `Model` has:
+
+| Property | Default | What it is |
 |---|---|---|
-| `smooth` | `0.0` | radio con que se funden las partes entre sí |
-| `material` | `None` | material para las partes que no tienen uno propio |
-| `size` | `1.0` | escala uniforme |
-| `rotation` | `(0, 0, 0)` | grados alrededor de x, y, z (se aplican en ese orden) |
-| `position` | `(0, 0, 0)` | dónde va |
-| `bend` | `(0, 0)` | curvatura: grados por unidad de altura, `(alrededor de x, alrededor de z)`. Es lo mismo que `.bend_x()` / `.bend_z()`, y se aplica después de `position` |
-| `symmetry` | `None` | `"x"`, `"y"` o `"z"`: copia el modelo al otro lado. Es lo mismo que `.mirror()` |
-| `carve` | `None` | como parte de otro modelo: se **resta** de las partes anteriores. Un número es el `smooth` del corte; `True` lo deja con borde filoso |
-| `join` | `None` | como parte de otro modelo: se suma **fundiéndose** con las partes anteriores, con ese radio |
-| `bounds` | `None` | acelerador opcional: el radio, o `(centro, radio)`, de una esfera que contenga al modelo entero (en su propio espacio, antes de `size`/`rotation`/`position`). Lejos de la esfera el modelo no se calcula. No cambia la imagen si la esfera lo contiene de verdad; si queda chica, el modelo se recorta. Las sombras y la oclusión ignoran la esfera (no oscurece nada por sí misma). No usarlo en partes que se funden con `smooth` con otras |
-| `parts` | `None` | lista explícita de partes (opcional) |
+| `smooth` | `0.0` | the radius the parts blend into each other with: with `0` they meet at a sharp edge, with `0.1` they melt together like clay |
+| `material` | `None` | the material for the parts that have none of their own |
+| `bounds` | `None` | an optional speed-up: the radius, or `(center, radius)`, of a sphere that contains the whole model (in its own space, before `size`/`rotation`/`position`). Far from the sphere the model is not computed. It does not change the picture if the sphere really contains it; if it is too small, the model is clipped. Shadows and occlusion ignore the sphere. Do not use it on parts that blend with others through `smooth` |
 
-Orden interno: se unen las partes → se pinta → `size` → `rotation` → `position`.
-Como se pinta antes de ubicar, las texturas quedan pegadas al modelo y se mueven
-con él.
+Internal order: the parts are put together → painted → `bounds` → `size` →
+`rotation` → `position` → `bend` → `symmetry`.
 
-`size` y `rotation` actúan alrededor del origen del modelo. Para que algo gire
-desde su base (una hoja, un brazo), modelalo con la base en el origen y llevalo
-a su lugar con `position`.
+### The role of each part
 
-### Declarar en vez de encadenar
-
-Toda forma acepta las mismas propiedades que un modelo, como argumentos con
-nombre. Así una pieza se declara en una línea, sin encadenar llamadas:
+Parts are applied in the order they are written, and each one says what it
+does to what came before it:
 
 ```python
-# encadenando                                       # declarando
-Torus(0.17, 0.012).move(y=0.114)                    Torus(0.17, 0.012, position=(0, 0.114, 0))
-Ellipsoid(0.07, 0.07, 0.04).rotate_x(30)            Ellipsoid(0.07, 0.07, 0.04, rotation=(30, 0, 0),
-    .move(x=0.18).mirror("x")                                 position=(0.18, 0, 0), symmetry="x")
+class Mug(sculpt.Model):
+    # The first one: the base.
+    body = sculpt.Cylinder(0.3, 0.6, rounding=0.03)
+    # Drawn on what came before.
+    logo = Badge(patch=(0, 0, 0.3))
+    # Cut out of what came before.
+    hollow = sculpt.Cylinder(
+        0.26, 0.6,
+        position=(0, 0.06, 0),
+        carve=0.01,
+    )
+    # Added, blended.
+    handle = sculpt.Torus(
+        0.15, 0.03,
+        rotation=(90, 0, 0),
+        position=(0.44, 0, 0),
+        join=0.03,
+    )
 ```
 
-Valen `material`, `size`, `rotation`, `position`, `bend`, `symmetry`, `carve`
-y `join`, y se aplican en ese orden (el mismo que en un `Model`). Las dos
-formas de escribir hacen lo mismo y se pueden mezclar.
-
-### El papel de cada parte
-
-Las partes de un modelo se aplican **en el orden en que están escritas**, y
-cada una dice qué hace con lo anterior:
-
-```python
-class Head(Model):
-    bone  = Ellipsoid(0.50, 0.45, 0.50)                                        # la primera: la base
-    eyes  = Eye(patch=(0.44, 0.06, 0.22), symmetry="x")                        # se dibuja sobre lo anterior
-    hole  = Ellipsoid(0.26, 0.26, 0.5, position=(0, -0.34, 0.34), carve=0.06)  # se resta de lo anterior
-    mouth = Mouth(join=0.03)                                                   # se suma, fundiéndose
-```
-
-| La parte lleva | Qué hace |
+| The part has | What it does |
 |---|---|
-| nada | se suma a lo anterior, con el `smooth` del modelo |
-| `carve=0.06` | se resta de todo lo anterior (el número suaviza el borde del corte) |
-| `join=0.03` | se suma fundiéndose con lo anterior, con ese radio |
-| `patch=(x, y, z)` | solo para `Disc` y `Drawing`: se dibuja sobre lo anterior, en ese punto (ver "Dibujos sobre una superficie") |
+| nothing | it is added to what came before, with the model's `smooth` |
+| `carve=0.01` | it is cut out of everything before it. The number softens the edge of the cut; `carve=True` leaves it sharp |
+| `join=0.03` | it is added, blended with what came before, with that radius instead of the model's `smooth`. `join=0` adds it without blending |
+| `patch=(x, y, z)` | only for `Disc` and `Drawing`: it is drawn on what came before, at that point (see [Drawings on a surface](#drawings-on-a-surface)) |
 
-- **El orden importa.** En `Head` la boca va después del hueco: si fuera
-  antes, el hueco también la cavaría a ella.
-- Un dibujo se pega sobre **todo** lo que está antes en ese modelo, y nada
-  más. Por eso conviene escribirlo justo después de su base (los ojos después
-  del hueso) y no al final: dibuja más rápido y no lo afectan los `smooth` de
-  las piezas que vienen después.
-- Con esto casi nunca hace falta `parts`.
+- **Order matters.** In `Mug` the handle comes after the hollow: if it came
+  before, the hollow would cut into it too.
+- `carve` and `join` act on **everything** before them in that model, and
+  nothing else. If a cut has to affect a single piece, that piece and its cut
+  go in a model of their own.
+- `join=0` is for a model that has `smooth` but where one part must not
+  blend: otherwise the blend would fatten it.
 
-### Variantes sin otra clase
+### Parameters of your own
+
+Any class attribute is a parameter that can be changed when the model is
+used. Properties read it from a method:
 
 ```python
-Critter(position=(1.5, 0, 0), size=0.6)
+class Lamp(sculpt.Model):
+    pole = sculpt.Capsule((0, 0, 0), (0, 1, 0), 0.03)
+
+    tilt = 0  # how far it leans, in degrees
+
+    def rotation(self, t):
+        return (0, 0, self.tilt + 4 * sculpt.sin(t * 2))
+
+
+lamp = Lamp(tilt=20)
 ```
+
+Only a name the class already has can be passed: `Lamp(tlit=20)` is an error.
+
+### Variants without another class
+
+```python
+Lamp(position=(-1.5, 0, 0.5), size=1.6, rotation=(0, 40, 0))
+```
+
+To change parts, inherit and redefine only what changes:
+
+```python
+class TallLamp(Lamp):
+    pole = sculpt.Capsule((0, 0, 0), (0, 1.6, 0), 0.03)
+    shade = sculpt.CutCone(0.25, 0.12, 0.3, position=(0, 1.7, 0))
+```
+
+---
+
+## Drawings on a surface
+
+For a mark, a ring or a spot that must not stick out: instead of resting
+another shape on top, a drawing is pasted on the surface. The drawing is
+defined on its own, without knowing what it goes on; the model that uses it
+says where.
+
+```python
+class Badge(sculpt.Drawing):
+    rim = sculpt.Disc(0.20, material=yellow)
+    # Written later: it ends up on top.
+    center = sculpt.Disc(0.13, material=black)
+    # Shifted from the center of the drawing.
+    dot = sculpt.Disc(0.045, material=white, at=(-0.04, 0.06, 0.05))
+
+
+class Mug(sculpt.Model):
+    body = sculpt.Cylinder(0.3, 0.6, rounding=0.03)
+    logo = Badge(patch=(0, 0, 0.3))
+
+
+class Buoy(sculpt.Model):
+    body = sculpt.Ellipsoid(0.39, 0.33, 0.34)
+    ring = sculpt.Disc(
+        0.12, inner=0.08,
+        material=white,
+        patch=(0.36, 0, -0.10),
+        symmetry="x",
+    )
+```
+
+| | |
+|---|---|
+| `Disc(radius, inner=0, material=None, at=(0, 0, 0))` | one layer: a disc of that radius. `inner` leaves a hole in the middle (a ring). `at` shifts it from the center of the drawing |
+| `Drawing` | a class to inherit from: its `Disc` attributes are the layers, stacked in the order they are written (the first one at the bottom) |
+
+Used as a part of a model, `Disc` and `Drawing` accept:
+
+| Property | What it is |
+|---|---|
+| `patch=(x, y, z)` | the point of the surface where the center of the drawing goes |
+| `symmetry="x"` | repeats it on the other side |
+| `lift=0.006` | how far each layer rises above the previous one. In a `Drawing` it can also be set on the class (`lift = 0.004`) |
+| `size=0.8` | `Drawing` only: shrinks or enlarges the whole drawing |
+
+- It is drawn on **everything** before it in that model, and nothing else.
+  That is why it is best written right after its base and not at the end: it
+  renders faster and the `smooth` of the pieces that come later does not
+  affect it.
+- Each disc is a piece of the same surface, barely raised: it follows the
+  surface even if the piece changes size, and its edge stays crisp.
+- `patch` has to be on the surface or very close to it; if it is far, the
+  drawing does not show.
+- **How much it sticks out** is decided by `lift`. The first layer rises
+  `lift` above the surface, the second one twice that, the third one three
+  times. Smaller looks more painted on; larger looks more like a plate
+  resting on it. If it is too small (below 0.002, roughly) the layers show
+  holes.
 
 ---
 
 ## Material
 
 ```python
-class Skin(Material):
+class Clay(sculpt.Material):
     specular = 0.30
 
     def color(self, p):
-        base = mix((0.26, 0.66, 0.58), (0.34, 0.76, 0.64), noise(p * 5.0))
-        freckles = smoothstep(0.70, 0.76, noise(p * 38.0))
-        return mix(base, (0.16, 0.45, 0.42), 0.7 * freckles)
+        base = sculpt.mix(
+            (0.26, 0.66, 0.58), (0.34, 0.76, 0.64), sculpt.noise(p * 5.0)
+        )
+        specks = sculpt.smoothstep(0.70, 0.76, sculpt.noise(p * 38.0))
+        return sculpt.mix(base, (0.16, 0.45, 0.42), 0.7 * specks)
 
     def bump(self, p):
-        return 0.0022 * fbm(p * 60.0) + 0.003 * noise(p * 14.0)
+        return 0.0022 * sculpt.fbm(p * 60.0) + 0.003 * sculpt.noise(p * 14.0)
 ```
 
-Forma corta, para materiales lisos:
+For plain materials the values are enough, on the class or when creating it:
 
 ```python
-dark = Material(color=(0.10, 0.10, 0.13), specular=0.9, shininess=80)
+class Paint(sculpt.Material):
+    color = (0.42, 0.80, 0.30)
+
+
+green = Paint()
+yellow = Paint(color=(1, 0.85, 0.15))
+dark = sculpt.Material(color=(0.10, 0.10, 0.13), specular=0.9, shininess=80)
 ```
 
-| Propiedad | Por defecto | Qué es |
+| Property | Default | What it is |
 |---|---|---|
-| `color` | `(0.8, 0.8, 0.8)` | `(r, g, b)` entre 0 y 1, tal como se ve en pantalla |
-| `specular` | `0.2` | fuerza del reflejo de la luz (`0` = mate) |
-| `shininess` | `32.0` | qué tan chico y definido es ese reflejo |
-| `glow` | `0.0` | luz propia |
-| `bump` | `None` | relieve: cuánto se hunde (+) o sobresale (−) la superficie |
+| `color` | `(0.8, 0.8, 0.8)` | `(r, g, b)` between 0 and 1, as seen on screen |
+| `specular` | `0.2` | strength of the light's highlight (`0` = matte) |
+| `shininess` | `32.0` | how small and sharp that highlight is |
+| `glow` | `0.0` | light of its own |
+| `bump` | `None` | relief: how much the surface sinks (+) or rises (−) |
 
-**`bump`** solo cambia cómo pega la luz, no la silueta (equivale a un "normal
-map"). Usá valores chicos, entre `0.001` y `0.01`. El número que multiplica a
-`p` es el tamaño del grano (más grande = más fino); el que multiplica al ruido
-es la profundidad.
+A material only knows those names. Any other attribute (`base = ...`) is
+yours: a method can read it with `self.base`, but on its own it changes
+nothing.
 
-**`p`** es la posición en el punto donde se pintó, compartida por todas las
-piezas pintadas juntas: una textura no muestra costuras entre partes unidas.
+**`bump`** only changes how light hits the surface, not the silhouette (it is
+the equivalent of a normal map). Use small values, between `0.001` and
+`0.01`. The number that multiplies `p` is the grain size (larger = finer);
+the one that multiplies the noise is the depth.
 
-Un método puede pedir también el tiempo:
+**`p`** is the position in the space of the piece or model that carries the
+material, before it is placed. All the parts of a model painted by its
+`material` share that space: a texture shows no seams between them.
+
+A method can also ask for time:
 
 ```python
-class Pulse(Material):
+class Pulse(sculpt.Material):
     def glow(self, p, t):
-        return 0.5 + 0.5 * sin(t * 4)
+        return 0.5 + 0.5 * sculpt.sin(t * 4)
 ```
 
 ---
 
-## Expresiones
+## Expressions
 
-Las cuentas con `t` o `p` no calculan un número: arman una fórmula que la placa
-de video evalúa en cada cuadro y en cada punto. Por eso se usan estas funciones
-y no las de `math`.
+Arithmetic with `t` or `p` does not compute a number: it builds a formula
+that the graphics card evaluates on every frame and at every point. That is
+why these functions are used instead of the ones in `math`.
 
 ### Variables
 
-| Nombre | Qué es |
+| Name | What it is |
 |---|---|
-| `T` | el tiempo, en segundos (lo mismo que el `t` de los métodos) |
-| `P` | la posición sobre el objeto (lo mismo que el `p` de los métodos) |
-| `p.x`, `p.y`, `p.z` | un componente de la posición |
+| `sculpt.T` | time, in seconds (the same as the `t` of the methods) |
+| `sculpt.P` | the position on the object (the same as the `p` of the methods) |
+| `p.x`, `p.y`, `p.z` | one component of the position |
 
-### Operaciones
+### Operations
 
-`+  -  *  /`, `-x`, `abs(x)` y `x ** n` funcionan directamente. Las tuplas de 3
-números se convierten solas en vectores.
+`+  -  *  /`, `-x`, `abs(x)` and `x ** n` work directly. Tuples of 3 numbers
+become vectors on their own.
 
-### Funciones
+### Functions
 
-| Función | Devuelve |
+All of them are used as `sculpt.sin(...)`.
+
+| Function | Returns |
 |---|---|
-| `sin(x)`, `cos(x)` | seno y coseno (en radianes) |
-| `minimum(a, b)`, `maximum(a, b)` | el menor / el mayor |
-| `clamp(x, lo, hi)` | `x` limitado a ese rango |
-| `fract(x)` | la parte decimal (sirve para repetir) |
-| `floor(x)` | la parte entera |
-| `length(v)` | el largo de un vector |
-| `vec(x, y, z)` | arma un vector a partir de tres fórmulas |
-| `mix(a, b, k)` | mezcla: `k=0` da `a`, `k=1` da `b` |
-| `smoothstep(a, b, x)` | transición suave: `0` si `x<a`, `1` si `x>b` (si `a>b`, al revés) |
-| `step(edge, x)` | transición dura: `0` si `x<edge`, `1` si no |
-| `noise(p)` | ruido suave entre 0 y 1 |
-| `noise_at(x, y, z)` | el mismo ruido, pero calculado en Python para un punto fijo: devuelve un número común. Sirve para ubicar cosas sobre algo hecho con `noise` (por ejemplo, saber la altura de un piso con lomas) |
-| `fbm(p)` | ruido con más detalle fino, entre 0 y 1 |
-| `checker(p, size=1.0)` | damero sobre el plano xz: `0` o `1` |
-| `stripes(x, width=0.2)` | rayas a lo largo de una coordenada: `0` o `1` |
+| `sin(x)`, `cos(x)` | sine and cosine (in radians) |
+| `minimum(a, b)`, `maximum(a, b)` | the smaller / the larger |
+| `clamp(x, lo, hi)` | `x` limited to that range |
+| `fract(x)` | the fractional part (useful for repeating) |
+| `floor(x)` | the integer part |
+| `length(v)` | the length of a vector |
+| `vec(x, y, z)` | builds a vector from three formulas |
+| `mix(a, b, k)` | blend: `k=0` gives `a`, `k=1` gives `b` |
+| `smoothstep(a, b, x)` | smooth transition: `0` if `x<a`, `1` if `x>b` (if `a>b`, the other way round) |
+| `step(edge, x)` | hard transition: `0` if `x<edge`, `1` otherwise |
+| `noise(p)` | smooth noise between 0 and 1 |
+| `noise_at(x, y, z)` | the same noise, but computed in Python for a fixed point: it returns a plain number. Useful to place things on something made with `noise` (for example, to know the height of a hilly ground) |
+| `fbm(p)` | noise with more fine detail, between 0 and 1 |
+| `checker(p, size=1.0)` | a checkerboard on the xz plane: `0` or `1` |
+| `stripes(x, width=0.2)` | stripes along one coordinate: `0` or `1` |
 
-### Recetas
+### Recipes
 
 ```python
-0.1 * abs(sin(t * 3))                       # rebote
-12 * sin(t * 3)                             # vaivén (en grados, para rotation)
-mix(color_a, color_b, noise(p * 5))         # variación suave de color
-smoothstep(0.70, 0.76, noise(p * 38))       # manchas o pecas (máscara 0..1)
-mix(color_a, color_b, stripes(p.x, 0.03))   # rayas
-smoothstep(0.0, 0.2, p.y)                   # degradé de abajo hacia arriba
+0.1 * abs(sculpt.sin(t * 3))  # bounce
+12 * sculpt.sin(t * 3)  # sway (in degrees, for rotation)
+sculpt.mix(color_a, color_b, sculpt.noise(p * 5))  # soft color variation
+sculpt.smoothstep(0.70, 0.76, sculpt.noise(p * 38))  # spots (a 0..1 mask)
+sculpt.mix(color_a, color_b, sculpt.stripes(p.x, 0.03))  # stripes
+sculpt.smoothstep(0.0, 0.2, p.y)  # gradient from the bottom up
 ```
 
 ---
@@ -429,128 +454,221 @@ smoothstep(0.0, 0.2, p.y)                   # degradé de abajo hacia arriba
 ## Scene, Camera, Light, Ground
 
 ```python
-class CritterScene(Scene):
-    critter = Critter                                  # todo modelo o forma se dibuja
-    camera = Camera(target=(0, 0.75, 0), distance=4.2, yaw=25, pitch=12)
-    light = Light(direction=(0.6, 0.8, 0.5))
+class DeskScene(sculpt.Scene):
+    desk = Desk  # every model or shape is drawn
+    camera = sculpt.Camera(
+        target=(0, 0.75, 0), distance=4.2, yaw=25, pitch=12
+    )
+    light = sculpt.Light(direction=(0.6, 0.8, 0.5))
 ```
 
-Forma corta: `scene = Scene(shape1, shape2, camera=Camera(...))`.
+A scene with no models yet also works: it shows the ground and the sky.
+Useful to start a file from scratch with the viewer already open.
 
-Una escena todavía sin modelos también funciona: muestra el piso y el cielo.
-Sirve para arrancar un archivo desde cero con el visor ya abierto.
-
-| Propiedad de `Scene` | Por defecto | Qué es |
+| `Scene` property | Default | What it is |
 |---|---|---|
 | `camera` | `Camera()` | |
 | `light` | `Light()` | |
-| `ground` | damero gris en `y=0` | `None` lo quita; `Ground(height=..., material=...)` lo cambia |
-| `background` | celeste | `(color_arriba, color_abajo)` |
-| `ambient` | azul cielo `(0.60, 0.75, 1.00)` | color de la luz de relleno: el tono que toma lo que queda en sombra. Cálido para interiores o bosques |
-| `quality` | `1` | `2` suaviza los bordes (4 veces más lento) |
-| `models` | `None` | lista explícita de lo que se dibuja (opcional) |
+| `ground` | a grey checkerboard at `y=0` | `None` removes it; `Ground(height=..., material=...)` changes it |
+| `background` | light blue | `(top_color, bottom_color)` |
+| `ambient` | sky blue `(0.60, 0.75, 1.00)` | the color of the fill light: the tone of whatever is in shadow. Warm for interiors |
+| `quality` | `1` | `2` smooths the edges (4 times slower) |
 
-| Clase | Parámetros (valor por defecto) |
+| Class | Parameters (default) |
 |---|---|
-| `Camera` | `target=(0, 0.5, 0)`, `distance=4.0`, `yaw=25` (giro), `pitch=15` (elevación), `lens=2.0` (más grande = más zoom, menos perspectiva) |
-| `Light` | `direction=(0.5, 0.7, 0.5)` (desde dónde viene), `color=(1.0, 0.95, 0.85)`, `intensity=1.0` |
-| `Ground` | `height=0.0`, `material=None`. `height` también puede ser una función de la posición, para un piso con lomas: `Ground(height=lambda p: 0.5 * noise(p * 0.2))` (usar `p.x` y `p.z`, pendientes suaves). Con lomas, `top=` es un acelerador opcional: una altura que las lomas nunca superan; por encima de ella no se calculan. Si queda baja, las cimas se ven cortadas |
+| `Camera` | `target=(0, 0.5, 0)` (the point it looks at), `distance=4.0`, `yaw=25` (turn around that point, sideways), `pitch=15` (elevation: 0 looks straight on, higher looks from above), `lens=2.0` (larger = more zoom, less perspective) |
+| `Light` | `direction=(0.5, 0.7, 0.5)` (where it comes from), `color=(1.0, 0.95, 0.85)`, `intensity=1.0` |
+| `Ground` | `height=0.0`, `material=None`. `height` can also be a function of the position, for a hilly ground: `Ground(height=lambda p: 0.5 * sculpt.noise(p * 0.2))` (use `p.x` and `p.z`, gentle slopes). With hills, `top=` is an optional speed-up: a height the hills never exceed; above it they are not computed. If it is too low, the hilltops look cut off |
 
-Además de la luz principal, el render agrega solo: luz de cielo, rebote del
-suelo, sombras suaves y oclusión ambiental. No se configuran.
+Besides the main light, the render adds on its own: sky light, bounce from
+the ground, soft shadows and ambient occlusion. They are not configurable.
 
 ---
 
-## El visor
+## The viewer
 
 ```bash
-python -m sculpt archivo.py [--port 8770] [--out carpeta] [--once]
+python -m sculpt file.py [--port 8770] [--out folder] [--once]
 ```
 
-- Toma la última subclase de `Scene` definida en el archivo, o una variable `scene`.
-- Escribe `build/<nombre>/`. El shader queda en `scene.glsl`, legible: sirve para
-  comparar lo escrito en Python con el GLSL que salió.
-- Se regenera al guardar el archivo, los `.py` de su carpeta o la librería.
-- `--once` genera los archivos y sale, sin servidor.
+- It takes the last `Scene` subclass defined in the file.
+- It writes `build/<name>/`. The shader is in `scene.glsl`, readable: useful
+  to compare what was written in Python with the GLSL that came out.
+- It is generated again when the file, the `.py` files in its folder or the
+  library are saved.
+- `--once` generates the files and exits, without a server.
 
-| Control | Acción |
+| Control | Action |
 |---|---|
-| arrastrar | girar la cámara |
-| rueda | zoom |
-| espacio | pausa |
-| `R` | reiniciar tiempo y cámara |
-| `1` `2` `3` | resolución baja / media / completa |
+| drag | orbit the camera |
+| wheel | zoom |
+| space | pause |
+| `R` | reset time and camera |
+| `1` `2` `3` | low / medium / full resolution |
 
-Si la escena tiene un error de Python, aparece en la terminal y el visor sigue
-mostrando la última versión que funcionó. Si el error es de GLSL, aparece en
-rojo sobre la página.
+If the scene has a Python error, it shows in the terminal and the viewer keeps
+showing the last version that worked. If the error is in the GLSL, it shows
+in red over the page.
 
-### Exportar a video
+### Exporting a video
 
 ```bash
-python -m sculpt archivo.py --video salida.mp4 [--size 1080x1920] [--seconds 8] [--fps 30] [--zoom 1.0] [--sway 0]
+python -m sculpt file.py --video out.mp4 [--size 1080x1920] [--seconds 8] [--fps 30] [--zoom 1.0] [--sway 0]
 ```
 
-Abre una pestaña del navegador que dibuja el video y lo guarda en `salida.mp4`.
-Por defecto es vertical (1080x1920), pensado para el celular.
+It opens a browser tab that draws the video and saves it to `out.mp4`. By
+default it is vertical (1080x1920), meant for a phone.
 
-| Opción | Qué hace |
+| Option | What it does |
 |---|---|
-| `--size ANCHOxALTO` | tamaño del video; `1920x1080` lo hace horizontal |
-| `--seconds` | duración |
-| `--fps` | cuadros por segundo |
-| `--zoom` | aleja (más de 1) o acerca (menos de 1) la cámara de la escena. En vertical suele hacer falta alejarla, por ejemplo `1.5` |
-| `--sway` | grados que la cámara se hamaca hacia los costados, ida y vuelta, a lo largo del video |
-| `--no-open` | no abre el navegador: imprime el link para abrirlo a mano |
+| `--size WIDTHxHEIGHT` | size of the video; `1920x1080` makes it horizontal |
+| `--seconds` | duration |
+| `--fps` | frames per second |
+| `--zoom` | moves the camera away from (above 1) or closer to (below 1) the scene. Vertical videos usually need it further away, for example `1.5` |
+| `--sway` | degrees the camera swings sideways, there and back, along the video |
+| `--no-open` | does not open the browser: prints the link to open it by hand |
 
-Cómo funciona: primero dibuja cada cuadro en su instante exacto, tarde lo que
-tarde (por eso el video sale fluido aunque el visor ande lento); después los
-reproduce a velocidad real mientras los graba. La pestaña tiene que quedar
-visible hasta que diga `saved`. No necesita instalar nada: codifica el
-navegador (MP4 con H.264 si lo soporta, WebM si no).
+How it works: first it draws every frame at its exact instant, however long
+that takes (so the video is smooth even if the viewer runs slowly); then it
+plays them back at real speed while recording. The tab has to stay visible
+until it says `saved`. Nothing needs to be installed: the browser does the
+encoding (MP4 with H.264 if supported, WebM otherwise).
 
 ---
 
-## Cosas que suelen confundir
+## Common pitfalls
 
-- **`if` no funciona con fórmulas.** `if p.y > 0:` falla porque `p.y` no es un
-  número. Se reemplaza por `step` o `smoothstep` más `mix`.
-- **`min`, `max` y `math.sin` tampoco.** Usar `minimum`, `maximum`, y `sin`/`cos`
-  de esta librería.
-- **El color no se funde en una unión suave.** La forma sí; el material cambia
-  de golpe en el borde. Para una transición de color, pintá todo con un solo
-  material y hacé la mezcla adentro de `color` con `p`.
-- **`mirror` necesita la forma del lado positivo.** Si queda en `x < 0`, desaparece.
-- **`scale` es uniforme.** Para estirar en un solo eje, cambiá los tamaños de la
-  forma (`Ellipsoid`, `Box`).
-- **Las rotaciones pasan por el origen.** Rotá antes de mover.
-- **Un `bump` grande se ve mal.** Por encima de `0.02` aparecen artefactos: es
-  relieve falso, no geometría.
-- **Formas muy finas pueden mostrar agujeros.** Pasa con elipsoides muy chatos;
-  engrosarlos un poco lo resuelve.
-
-## Lo que todavía no existe
-
-- Fundido de materiales en uniones suaves.
-- Deformaciones: torcer, repetir en ronda (alrededor de un eje), estirar en un eje, doblar formas que no sean verticales (para eso: `bend` primero, `rotate` después).
-- Curvas con más de un doblez (una `Curve` dobla una sola vez; se encadenan varias) y mechones chatos como los del pelo.
-- Luces adicionales o configurables más allá de la principal.
-- Varios pases: desenfoque por profundidad, contornos de dibujo.
-- Texturas de imagen (solo hay patrones calculados).
+- **A name sculpt does not know is not an error.** `base = GREEN` in a
+  `Material` does not paint it: the color is called `color`. And if a class
+  defines the same property twice (`rotation = ...` and further down
+  `def rotation`), the last one wins.
+- **The order of the parts changes the result.** A `carve` cuts everything
+  written before it; a drawing is pasted on everything written before it.
+- **The order of the properties changes nothing.** They are always applied
+  the same way: `size`, `rotation`, `position`, `bend`, `symmetry`.
+- **`if` does not work with formulas.** `if p.y > 0:` fails because `p.y` is
+  not a number. Use `step` or `smoothstep` together with `mix` instead.
+- **Neither do `min`, `max` and `math.sin`.** Use `sculpt.minimum`,
+  `sculpt.maximum`, `sculpt.sin` and `sculpt.cos`.
+- **Color does not blend in a smooth union.** The shape does; the material
+  changes abruptly at the edge. For a color transition, paint everything
+  with a single material and do the blend inside `color` with `p`.
+- **`symmetry` needs the piece on the positive side.** If it ends up at
+  `x < 0`, it disappears.
+- **`size` is uniform.** To stretch along one axis, change the measures of
+  the shape (`Ellipsoid`, `Box`).
+- **A large `bump` looks wrong.** Above `0.02` artifacts appear: it is fake
+  relief, not geometry.
+- **Very thin shapes can show holes.** It happens with very flat ellipsoids;
+  making them a little thicker fixes it.
 
 ---
 
-## Archivos
+## What cannot be declared
 
-| Archivo | Qué tiene |
+Four things do not have a property yet.
+
+### Repeating
+
+`repeat` splits space into cells and puts one copy in each. The piece is
+computed only once, so a thousand copies cost the same as one. It is a
+method: it is called on the shape or the model.
+
+```python
+def away_from_center(c):
+    # c is the center of the cell: no copies closer than 14 to the origin.
+    return sculpt.step(14, sculpt.length(c))
+
+
+class Hall(sculpt.Scene):
+    columns = Column().repeat(
+        x=22, z=22,
+        jitter=2.0,
+        size=(0.8, 1.5),
+        spin=True,
+        where=away_from_center,
+    )
+```
+
+| Option | What it does |
 |---|---|
-| `expr.py` | expresiones: `T`, `P` y las funciones |
-| `shapes.py` | formas, transformaciones, combinaciones y `Material` |
+| `x`, `y`, `z` | distance between copies along each axis (0 = not repeated along that axis) |
+| `limit` | how many copies on each side of the middle one (`limit=2` is 5); without `limit` they never end |
+| `jitter` | each copy is shifted from its place by a random distance, up to that value |
+| `size` | `(minimum, maximum)`: each copy gets a random size between those two |
+| `spin` | `True` turns each copy a random angle around the vertical |
+| `where` | a function of the center of each cell: above 0.5 there is a copy, otherwise the cell stays empty |
+| `seed` | another number gives another random layout |
+
+- **Each copy has to fit in its cell**, which reaches half the distance to
+  each side. Count the `jitter` and the maximum size, and leave a margin of
+  0.1. If it does not fit, it looks cut at the edge of the cell.
+- The piece is repeated around the origin: there is a copy at the origin,
+  another one a distance away, another one two distances away. To shift the
+  whole grid, add `.move(y=-0.4)` after the `repeat`.
+- The randomness is always the same for the same cell: it does not change
+  from one frame to the next.
+- All the copies are animated alike and carry the same texture.
+
+### Intersection
+
+What two shapes have in common is written with `&`, inside a `parts` list:
+
+```python
+class Lens(sculpt.Model):
+    parts = [
+        sculpt.Sphere(0.5, position=(0.3, 0, 0))
+        & sculpt.Sphere(0.5, position=(-0.3, 0, 0))
+    ]
+```
+
+When `parts` is defined, the other attributes of the class do not count as
+parts.
+
+### Parts that depend on a parameter
+
+A part written as an attribute cannot read `self`. If its measures depend on
+a parameter of the model, `parts` is written as a method:
+
+```python
+class Plank(sculpt.Model):
+    length = 1.0
+
+    def parts(self):
+        half = self.length / 2
+        return [sculpt.Box(0.2, self.length, 0.04, position=(0, half, 0))]
+```
+
+`parts` can also receive `t`, like any property.
+
+### Another order of turns
+
+Properties are applied in a fixed order. When another one is needed (turning
+after bending, for example), the piece is wrapped in a model: the inner one
+bends, the outer one turns.
+
+---
+
+## What does not exist yet
+
+- Blending of materials in smooth unions.
+- Deformations: twisting, repeating in a ring (around an axis), stretching
+  along one axis, bending pieces that are not vertical.
+- Curves with more than one bend (a `Curve` bends only once; several are
+  placed one after another) and flat ribbons.
+- Additional or configurable lights beyond the main one.
+- Several passes: depth of field, outlines.
+- Image textures (there are only computed patterns).
+
+---
+
+## Files
+
+| File | What it has |
+|---|---|
+| `expr.py` | expressions: `T`, `P` and the functions |
+| `shapes.py` | shapes, properties, drawings and `Material` |
 | `model.py` | `Model` |
-| `scene.py` | `Scene`, `Camera`, `Light`, `Ground` y el generador de GLSL |
-| `__main__.py` | el comando del visor |
-| `template/` | la página del visor y la biblioteca GLSL fija |
-
-Para extender la librería también se exportan tres piezas internas: `Shape` (la
-clase base de toda forma), `Expr` (una fórmula) y `E(x)` (convierte un número o
-una tupla en fórmula). No hacen falta para modelar.
+| `scene.py` | `Scene`, `Camera`, `Light`, `Ground` and the GLSL generator |
+| `__main__.py` | the viewer command |
+| `template/` | the viewer page and the fixed GLSL library |
