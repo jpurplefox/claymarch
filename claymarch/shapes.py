@@ -6,6 +6,8 @@ generate the shader the tree is walked and every node adds lines to map(), the
 distance function (SDF) of the whole scene.
 """
 import inspect
+import math
+import re
 
 from .expr import E, Expr, P, T, _num
 
@@ -102,6 +104,57 @@ class Context:
         return len(self.materials) - 1
 
 
+# ============================================================ how big it is
+# Every shape can say how much room it takes: spheres() is a handful of
+# spheres (center, radius) that together contain it, or None when that
+# cannot be known ahead of time (it goes on forever, it is bent, or it moves
+# with t). extent() is one sphere around them all. Models use it to wrap
+# themselves in a bounding sphere without being told (see _Bound).
+def _const(expr):
+    """The plain number (or tuple of numbers) an Expr stands for, or None if
+    it depends on something only known while drawing (t, the point...)."""
+    code = expr.code
+    if not re.fullmatch(r"[-+*/().,\s\deE]*", code.replace("vec3", "").replace("vec2", "")):
+        return None
+    try:
+        return eval(code, {"__builtins__": {}}, {"vec3": lambda *c: c, "vec2": lambda *c: c})
+    except Exception:
+        return None
+
+
+def _length(v):
+    return math.sqrt(sum(c * c for c in v))
+
+
+def _enclose(spheres):
+    """One sphere around several: start in the middle of the box that holds
+    them and keep stepping, less each time, toward whichever sticks out."""
+    if not spheres:
+        return None
+    lows = [min(c[i] - r for c, r in spheres) for i in range(3)]
+    highs = [max(c[i] + r for c, r in spheres) for i in range(3)]
+    center = [(a + b) / 2 for a, b in zip(lows, highs)]
+    def reach(center):
+        return max((_length([a - b for a, b in zip(c, center)]) + r, c) for c, r in spheres)
+    best = (reach(center)[0], tuple(center))
+    for step in range(1, 60):
+        _, far = reach(center)
+        center = [a + (b - a) / (step + 1) for a, b in zip(center, far)]
+        best = min(best, (reach(center)[0], tuple(center)))
+    return best[1], best[0]
+
+
+def _along(a, c, b, r1, r2, pieces=8):
+    """Spheres that cover a parabola arc from a to b pulled toward c."""
+    bulge = _length([p - 2 * q + r for p, q, r in zip(a, c, b)]) / (4 * pieces * pieces)
+    found = []
+    for i in range(pieces + 1):
+        t = i / pieces
+        point = tuple((1 - t) ** 2 * p + 2 * t * (1 - t) * q + t * t * r for p, q, r in zip(a, c, b))
+        found.append((point, r1 + (r2 - r1) * t + bulge))
+    return found
+
+
 class Shape:
     """Base of everything that can be drawn."""
 
@@ -113,6 +166,19 @@ class Shape:
     def emit(self, ctx, p, mat):
         """Write GLSL into ctx. Returns (distance, material, coords) as text."""
         raise NotImplementedError
+
+    def spheres(self):
+        """Spheres (center, radius) that together contain this shape, or None."""
+        return None
+
+    def extent(self):
+        """One sphere (center, radius) that contains this shape, or None."""
+        found = self.spheres()
+        return None if found is None else _enclose(found)
+
+    def weight(self):
+        """Roughly how much work this shape is to compute."""
+        return 1
 
     # --- transforms (return a new shape; they can be chained)
     def move(self, x=0.0, y=0.0, z=0.0):
@@ -170,12 +236,20 @@ class Shape:
         """
         if lift is None:
             lift = _lift(drawing)
+        facing = _facing_of(drawing)
         layers = []
-        for i, disc in enumerate(_discs(drawing)):
-            center = tuple(a + b for a, b in zip(at, disc.at))
+        for i, disc in enumerate(_layers(drawing, facing)):
             height = lift * (i + 1)
             if isinstance(height, float):
                 height = round(height, 9)        # 0.006 * 3 is 0.018, not 0.018000000000000002
+            if facing is not None:
+                # a flat drawing, stamped along its facing
+                layer = self.round(height) & _front(_stamp(disc, at, facing), at, facing, drawing)
+                if disc.material is not None:
+                    layer = layer.paint(disc.material)
+                layers.append(layer)
+                continue
+            center = tuple(a + b for a, b in zip(at, disc.at))
             layer = self.round(height) & Sphere(disc.radius).move(center)
             if disc.inner:
                 layer = layer - Sphere(disc.inner).move(center)
@@ -183,6 +257,23 @@ class Shape:
                 layer = layer.paint(disc.material)
             layers.append(layer)
         return union(*layers)
+
+    def engrave(self, drawing, at, symmetry=None):
+        """This shape with a drawing sunk into its surface: a groove as deep
+        as the drawing's depth, with a floor that follows the surface.
+
+        Where the drawing falls, the shape is cut away, but only down to
+        that depth: what is deeper stays. smooth (of the drawing) rounds
+        the edge of the groove."""
+        facing = _facing_of(drawing)
+        stamp = union(*[_stamp(layer, at, facing) for layer in _layers(drawing, facing)])
+        if facing is not None:
+            stamp = _front(stamp, at, facing, drawing)
+        if symmetry is not None:
+            stamp = stamp.mirror(symmetry)
+        widest = max(layer.width / 2 if isinstance(layer, Line) else layer.radius
+                     for layer in _layers(drawing, facing))
+        return _Engrave(self, stamp, drawing.depth, drawing.smooth, widest)
 
     # --- combinations. smooth > 0 blends the shapes with that transition radius
     def union(self, other, smooth=0.0):     return _Combine("union", self, other, smooth)
@@ -242,44 +333,141 @@ class Disc:
         self.patch_at, self.symmetry = patch, symmetry
 
 
+class Line:
+    """A straight stroke of a drawing, from start to end, with round ends.
+
+    start, end: points measured from the middle of the drawing: (x, y, z),
+                or (x, y) for z = 0.
+    width:      how thick the stroke is.
+    material:   what it is painted with (when the drawing is patched).
+
+    A line only exists in a drawing that has a facing: it is flat, and it
+    is stamped on the surface along that direction.
+    """
+    def __init__(self, start, end, width=0.02, material=None):
+        self.start, self.end, self.width = _point(start), _point(end), width
+        self.material = as_material(material) if material is not None else None
+
+
+class _Stroke:
+    """A Path used as a layer of a drawing: a curved stroke."""
+    def __init__(self, arcs, radius, material):
+        self.arcs, self.radius, self.material = arcs, radius, material
+
+
+def _stroke(value, k=1.0):
+    """The layer a Path stands for in a drawing (None if it is not one),
+    k times bigger."""
+    material = None
+    if isinstance(value, _Paint):
+        value, material = value.child, value.material
+    if not isinstance(value, Path):
+        return None
+    radius = _const(value.r)
+    if value.r2 is not None or radius is None:
+        raise ValueError("a Path in a drawing has one thickness, a plain number")
+    arcs = [tuple(tuple(c * k for c in point) for point in arc) for arc in value.arcs]
+    return _Stroke(arcs, radius * k, material)
+
+
+def _point(point):
+    if len(point) == 2:
+        return (point[0], point[1], 0.0)
+    if len(point) != 3:
+        raise TypeError("Line: a point is (x, y, z), or (x, y) for z = 0")
+    return tuple(point)
+
+
+_AXES = {"x": (1.0, 0.0, 0.0), "-x": (-1.0, 0.0, 0.0), "y": (0.0, 1.0, 0.0),
+         "-y": (0.0, -1.0, 0.0), "z": (0.0, 0.0, 1.0), "-z": (0.0, 0.0, -1.0)}
+
+
 class Drawing:
-    """Several discs, one on top of another, to draw on a surface: an eye, a
-    spot. It knows nothing about the shape it goes on; that shape puts it in
-    place with patch():
+    """Several discs, lines and paths, one on top of another, to draw on a surface:
+    an eye, a spot, a pattern of grooves. It knows nothing about the shape
+    it goes on; as a part of a Model it says where it goes and how:
 
         class Eye(Drawing):
             rim   = Disc(0.20, material=yellow)
             pupil = Disc(0.13, material=black)       # written later: goes on top
 
-        eyes = skull.patch(Eye(), at=(0.44, 0.06, 0.22)).mirror("x")
+        eyes = Eye(patch=(0.44, 0.06, 0.22), symmetry="x")     # painted on
+        mark = Cross(engrave=(0, 0, 0.5), facing="z")          # sunk in
 
     size makes the whole drawing bigger or smaller: Eye(size=0.8).
-    lift is how far each disc is raised above the one below it (and the
-    first one above the surface): smaller looks more painted on, bigger
+    lift (patch) is how far each layer is raised above the one below it (and
+    the first one above the surface): smaller looks more painted on, bigger
     looks more like a sticker. Too small and the layers show holes.
+    depth (engrave) is how deep the groove is, and smooth rounds its edge.
+
+    facing is the direction the drawing looks at, away from the surface:
+    (x, y, z), or "x", "-x", "y", "-y", "z", "-z". With it the drawing is
+    flat and it is stamped on the surface along that direction, like a
+    slide projector would; lines need it. Without it only discs can be
+    drawn: each one is whatever of the surface is closer to its middle than
+    its radius, so it needs no direction.
+
+    reach is how far behind its point a drawing with facing still marks the
+    surface, so that it does not come out on the other side. Left out, it
+    reaches the middle of the piece (its origin).
+
+    The layers are the Disc, Line and Path attributes, or a `parts` list
+    (or a method that returns it) when they are easier to compute. A Path
+    is a curved stroke: like a Line it is flat and needs a facing, and its
+    radius is half the width of the stroke.
     """
     size = 1.0
     lift = 0.006
+    depth = 0.01
+    smooth = 0.0
+    facing = None
+    reach = None
+    symmetry = None
+    parts = None
 
-    def __init__(self, size=None, patch=None, symmetry=None, lift=None):
-        if size is not None:
-            self.size = size
-        if lift is not None:
-            self.lift = lift
+    def __init__(self, size=None, patch=None, symmetry=None, lift=None, engrave=None,
+                 depth=None, smooth=None, facing=None, reach=None):
+        for name, value in (("size", size), ("lift", lift), ("depth", depth),
+                            ("smooth", smooth), ("facing", facing), ("reach", reach)):
+            if value is not None:
+                setattr(self, name, value)
+        if patch is not None and engrave is not None:
+            raise TypeError(f"{type(self).__name__}: a drawing is patched OR engraved, not both")
         # as a part of a Model: where it is drawn on the parts before it
-        self.patch_at, self.symmetry = patch, symmetry
+        self.patch_at, self.engrave_at = patch, engrave
+        if symmetry is not None:
+            self.symmetry = symmetry
 
-    def discs(self):
-        found = {}
-        for cls in reversed(type(self).__mro__):
-            for name, value in vars(cls).items():
-                if not name.startswith("_") and isinstance(value, Disc):
-                    found[name] = value
+    def layers(self):
+        """The discs and lines, at their final size."""
+        found = self.parts() if callable(self.parts) else self.parts
+        if found is None:
+            named = {}
+            for cls in reversed(type(self).__mro__):
+                for name, value in vars(cls).items():
+                    if not name.startswith("_") and (isinstance(value, (Disc, Line))
+                                                     or _stroke(value) is not None):
+                        named[name] = value
+            found = list(named.values())
         if not found:
-            raise ValueError(f"{type(self).__name__} has no discs: add Disc attributes")
+            raise ValueError(f"{type(self).__name__} has nothing to draw: add Disc, Line or Path "
+                             "attributes")
         k = self.size
-        return [Disc(d.radius * k, d.inner * k, d.material, tuple(c * k for c in d.at))
-                for d in found.values()]
+        layers = []
+        for d in found:
+            if isinstance(d, Disc):
+                layers.append(Disc(d.radius * k, d.inner * k, d.material, tuple(c * k for c in d.at)))
+            elif isinstance(d, Line):
+                layers.append(Line(tuple(c * k for c in d.start), tuple(c * k for c in d.end),
+                                   d.width * k, d.material))
+            elif _stroke(d) is not None:
+                layers.append(_stroke(d, k))
+            else:
+                raise TypeError(f"{type(self).__name__}: a drawing is made of Disc, Line and Path, "
+                                f"not {d!r}")
+        return layers
+
+    discs = layers
 
 
 def is_drawing(value):
@@ -308,15 +496,30 @@ def assemble(parts, smooth, who):
     part says what it does to what came before it: it is added (blended with
     the model's smooth), joined with its own blend, carved out, or drawn on
     the surface."""
+    # A model used as a part wraps itself in a bounding sphere when it can
+    # (see Model.build), which is only right if it is simply added. One that
+    # melts into its neighbors or cuts them is built without the sphere, and
+    # so is every part when some blend is wide enough to reach a sphere.
+    wide = not _zero(smooth) or any(
+        not is_drawing(part) and part._role is not None and part._role[0] == "join"
+        and not (isinstance(part._role[1], (int, float)) and part._role[1] < 0.1)
+        for part in parts)
     whole = None
     for part in parts:
+        if getattr(part, "_is_model", False):
+            role = part._role
+            if wide or (role is not None and not (role[0] == "join" and _zero(role[1]))):
+                part = _unbounded(part, role)
         if is_drawing(part):
             if whole is None:
                 raise ValueError(f"{who}: a drawing needs a part before it to be drawn on")
+            if getattr(part, "engrave_at", None) is not None:
+                whole = whole.engrave(part, at=part.engrave_at, symmetry=part.symmetry)
+                continue
             if part.patch_at is None:
-                raise ValueError(f"{who}: a drawing used as a part needs patch=(x, y, z), the point where it goes")
-            drawn = whole.patch(part, at=part.patch_at)
-            whole = whole.union(drawn if part.symmetry is None else drawn.mirror(part.symmetry))
+                raise ValueError(f"{who}: a drawing used as a part needs patch=(x, y, z) or "
+                                 "engrave=(x, y, z), the point where it goes")
+            whole = _patched(whole, part, part.patch_at, part.symmetry)
             continue
         role = part._role
         if whole is None:
@@ -332,6 +535,14 @@ def assemble(parts, smooth, who):
     return whole
 
 
+def _unbounded(model, role):
+    """A model as a plain shape with no bounding sphere of its own, keeping
+    what it does as a part."""
+    shape = _Plain()
+    shape.model, shape._role = model, role
+    return shape
+
+
 def _lift(drawing):
     if isinstance(drawing, type) and issubclass(drawing, Drawing):
         return drawing.lift
@@ -339,14 +550,78 @@ def _lift(drawing):
     return 0.006 if lift is None else lift
 
 
-def _discs(drawing):
+def _layers(drawing, facing):
     if isinstance(drawing, type) and issubclass(drawing, Drawing):
         drawing = drawing()
-    if isinstance(drawing, Drawing):
-        return drawing.discs()
     if isinstance(drawing, Disc):
         return [drawing]
-    raise TypeError(f"patch expects a Disc or a Drawing, got {drawing!r}")
+    if not isinstance(drawing, Drawing):
+        raise TypeError(f"expected a Disc or a Drawing, got {drawing!r}")
+    layers = drawing.layers()
+    if facing is None and any(isinstance(layer, (Line, _Stroke)) for layer in layers):
+        raise ValueError(
+            f"{type(drawing).__name__} has lines or paths, so it needs a facing: the direction it "
+            'looks at, away from the surface, like facing="z" or facing=(0, 1, 1)')
+    return layers
+
+
+def _facing_of(drawing):
+    """The facing of a drawing as a direction of length 1, or None."""
+    facing = getattr(drawing, "facing", None)
+    if facing is None:
+        return None
+    if isinstance(facing, str):
+        if facing not in _AXES:
+            raise ValueError(f"facing: {facing!r} is not a direction; use (x, y, z) or one of "
+                             + ", ".join(repr(a) for a in _AXES))
+        return _AXES[facing]
+    if len(facing) != 3:
+        raise TypeError("facing is a direction: (x, y, z)")
+    length = math.sqrt(sum(c * c for c in facing))
+    if length == 0:
+        raise ValueError("facing cannot be (0, 0, 0)")
+    return tuple(c / length for c in facing)
+
+
+def _flat(vector, facing):
+    """The vector without its part along facing: its shadow on the drawing."""
+    along = sum(a * b for a, b in zip(vector, facing))
+    return tuple(round(a - along * b, 9) for a, b in zip(vector, facing))
+
+
+def _stamp(layer, at, facing):
+    """One layer of a flat drawing as a shape that goes on forever along
+    facing: what it cuts out of a surface is the layer, seen from there."""
+    if isinstance(layer, Line):
+        start = tuple(a + b for a, b in zip(at, layer.start))
+        across = _flat(tuple(b - a for a, b in zip(layer.start, layer.end)), facing)
+        return _Flat(start, across, facing, layer.width / 2)
+    if isinstance(layer, _Stroke):
+        arcs = [tuple(_flat(tuple(a + b for a, b in zip(at, point)), facing) for point in arc)
+                for arc in layer.arcs]
+        return _FlatPath(arcs, facing, layer.radius)
+    center = tuple(a + b for a, b in zip(at, layer.at))
+    if facing is None:
+        # no direction: whatever is closer to the middle than the radius
+        stamp = Sphere(layer.radius).move(center)
+        return stamp - Sphere(layer.inner).move(center) if layer.inner else stamp
+    stamp = _Flat(center, (0.0, 0.0, 0.0), facing, layer.radius)
+    if layer.inner:
+        stamp = stamp - _Flat(center, (0.0, 0.0, 0.0), facing, layer.inner)
+    return stamp
+
+
+def _front(stamp, at, facing, drawing):
+    """Keep a stamp from coming out on the other side of the piece: it only
+    counts from its point back to `reach`."""
+    reach = getattr(drawing, "reach", None)
+    if reach is None:
+        reach = sum(a * b for a, b in zip(at, facing))
+        if reach <= 0:
+            raise ValueError(
+                "this drawing's point is not in front of the middle of the piece, so say "
+                "how far behind the point it still marks the surface: reach=0.3")
+    return stamp & _Behind(at, facing, reach)
 
 
 def _is_model_class(value):
@@ -444,6 +719,9 @@ class Sphere(_Primitive):
         self.r = E(radius)
     def sdf(self, p):
         return f"length({p})-{self.r.code}"
+    def spheres(self):
+        r = _const(self.r)
+        return None if r is None else [((0.0, 0.0, 0.0), r)]
 
 
 class Ellipsoid(_Primitive):
@@ -452,6 +730,22 @@ class Ellipsoid(_Primitive):
         self.r = E((rx, ry, rz))
     def sdf(self, p):
         return f"sdEllipsoid({p}, {self.r.code})"
+    def spheres(self):
+        r = _const(self.r)
+        if r is None:
+            return None
+        # points all over its surface, each padded by how far the surface
+        # can bulge between one point and the next
+        pad = max(r) * (1 - math.cos(math.radians(15)))
+        found = [((0.0, r[1], 0.0), pad), ((0.0, -r[1], 0.0), pad)]
+        for up in (-60, -30, 0, 30, 60):
+            for turn in range(0, 360, 30):
+                u, v = math.radians(up), math.radians(turn)
+                found.append(((r[0] * math.cos(u) * math.cos(v), r[1] * math.sin(u),
+                               r[2] * math.cos(u) * math.sin(v)), pad))
+        return found
+    def weight(self):
+        return 2
 
 
 class Box(_Primitive):
@@ -462,6 +756,12 @@ class Box(_Primitive):
     def sdf(self, p):
         b = ", ".join(c.code for c in self.b)
         return f"sdBox({p}, vec3({b}))-{self.rounding.code}"
+    def spheres(self):
+        b, r = [_const(c) for c in self.b], _const(self.rounding)
+        if r is None or None in b:
+            return None
+        return [((x * b[0], y * b[1], z * b[2]), r)
+                for x in (-1, 1) for y in (-1, 1) for z in (-1, 1)]
 
 
 class Capsule(_Primitive):
@@ -472,6 +772,11 @@ class Capsule(_Primitive):
         self.r2 = E(radius if radius2 is None else radius2)
     def sdf(self, p):
         return f"sdCapsule2({p}, {self.a.code}, {self.b.code}, {self.r1.code}, {self.r2.code})"
+    def spheres(self):
+        a, b, r1, r2 = _const(self.a), _const(self.b), _const(self.r1), _const(self.r2)
+        if None in (a, b, r1, r2):
+            return None
+        return [(a, r1), (b, r2)]
 
 
 class Curve(_Primitive):
@@ -484,6 +789,137 @@ class Curve(_Primitive):
     def sdf(self, p):
         return (f"sdCurve({p}, {self.a.code}, {self.c.code}, {self.b.code}, "
                 f"{self.r1.code}, {self.r2.code})")
+    def spheres(self):
+        a, c, b, r1, r2 = (_const(v) for v in (self.a, self.c, self.b, self.r1, self.r2))
+        if None in (a, c, b, r1, r2):
+            return None
+        return _along(a, c, b, r1, r2)
+    def weight(self):
+        return 4
+
+
+class Path(_Primitive):
+    """Tube that follows a list of points: a chain of Curves. With radius2
+    it tapers from the first point to the last, the same amount on every
+    bend. It starts at the first point and ends at the last; the points in
+    between are where it is pulled toward, one bend for each (like the
+    control of a Curve, it does not touch them). closed=True makes a loop:
+    every point pulls, and none is touched.
+
+    Each bend starts and ends halfway between its point and the neighbors,
+    which is why the bends meet without a corner."""
+    def __init__(self, points, radius=0.1, closed=False, radius2=None):
+        points = [tuple(float(c) for c in point) for point in points]
+        if len(points) < 2 or any(len(point) != 3 for point in points):
+            raise ValueError("Path needs two or more points, each one (x, y, z)")
+        if closed and len(points) < 3:
+            raise ValueError("a closed Path needs three or more points")
+        if closed and radius2 is not None:
+            raise ValueError("a closed Path has no end to taper toward: leave radius2 out")
+        self.r = E(radius)
+        self.r2 = None if radius2 is None else E(radius2)
+        self.arcs = _arcs(points, closed)
+    def _radius(self, i):
+        """Code of the thickness where bend number i starts."""
+        share = i / len(self.arcs)
+        r1, r2 = _const(self.r), _const(self.r2)
+        if r1 is None or r2 is None:
+            return f"mix({self.r.code}, {self.r2.code}, {E(share).code})"
+        return E(round(r1 + (r2 - r1) * share, 5)).code
+    def sdf(self, p):
+        d = None
+        for i, (start, control, end) in enumerate(self.arcs):
+            radii = "0.0, 0.0" if self.r2 is None else f"{self._radius(i)}, {self._radius(i + 1)}"
+            arc = (f"sdCurve({p}, {E(start).code}, {E(control).code}, "
+                   f"{E(end).code}, {radii})")
+            d = arc if d is None else f"min({d}, {arc})"
+        return d if self.r2 is not None else f"{d}-{self.r.code}"
+    def spheres(self):
+        r = _const(self.r)
+        r2 = r if self.r2 is None else _const(self.r2)
+        if r is None or r2 is None:
+            return None
+        n = len(self.arcs)
+        return [sphere for i, (a, c, b) in enumerate(self.arcs)
+                for sphere in _along(a, c, b, r + (r2 - r) * i / n, r + (r2 - r) * (i + 1) / n, pieces=4)]
+    def weight(self):
+        return 4 * len(self.arcs)
+
+
+def _halfway(a, b):
+    return tuple((p + q) / 2 for p, q in zip(a, b))
+
+
+def _arcs(points, closed):
+    """The (start, control, end) of each Curve of a Path."""
+    if closed:
+        n = len(points)
+        return [(_halfway(points[i - 1], points[i]), points[i],
+                 _halfway(points[i], points[(i + 1) % n])) for i in range(n)]
+    if len(points) == 2:
+        return [(points[0], _halfway(*points), points[1])]
+    pulls = points[1:-1]
+    stops = [points[0], *map(_halfway, pulls, pulls[1:]), points[-1]]
+    return list(zip(stops, pulls, stops[1:]))
+
+
+class _Flat(_Primitive):
+    """A layer of a flat drawing (a disc, or a line when across is not
+    zero), stretched forever along facing."""
+    def __init__(self, start, across, facing, radius):
+        self.a, self.ba, self.f, self.r = E(start), E(across), E(facing), E(radius)
+    def sdf(self, p):
+        return f"sdFlat({p}, {self.a.code}, {self.ba.code}, {self.f.code})-{self.r.code}"
+
+
+class _FlatPath(_Primitive):
+    """A Path of a flat drawing, stretched forever along facing. Its points
+    are already flat: they have nothing along facing."""
+    def __init__(self, arcs, facing, radius):
+        self.arcs, self.f, self.r = arcs, E(facing), E(radius)
+    def sdf(self, p):
+        d = None
+        for start, control, end in self.arcs:
+            arc = (f"sdFlatCurve({p}, {E(start).code}, {E(control).code}, "
+                   f"{E(end).code}, {self.f.code})")
+            d = arc if d is None else f"min({d}, {arc})"
+        return f"{d}-{self.r.code}"
+
+
+class _Behind(_Primitive):
+    """Everything from `reach` behind a point (against facing) to the front."""
+    def __init__(self, at, facing, reach):
+        self.at, self.f, self.reach = E(at), E(facing), E(reach)
+    def sdf(self, p):
+        return f"-(dot({p}-{self.at.code}, {self.f.code})+{self.reach.code})"
+
+
+class _Engrave(Shape):
+    """A shape with a groove: the stamp is cut out of it, but no deeper than
+    depth below its surface.
+
+    A groove changes nothing farther out than it is wide (widest is half
+    the width of its thickest stroke), so out there the stamp is skipped."""
+    def __init__(self, child, stamp, depth, smooth, widest):
+        self.child, self.stamp, self.depth, self.k = child, stamp, E(depth), E(smooth)
+        self.near = E(widest) + self.k
+    def emit(self, ctx, p, mat):
+        d, m, u = self.child.emit(ctx, p, mat)
+        r = ctx.var("d")
+        ctx.line(f"float {r} = {d};")
+        ctx.line(f"if( {d}<{self.near.code} ) {{")
+        s, _, _ = self.stamp.emit(ctx, p, mat)
+        cut = ctx.var("d")
+        ctx.line(f"float {cut} = max({s}, -({d}+{self.depth.code}));")
+        smooth = self.k.code not in ("0.0", "0")
+        ctx.line(f"{r} = " + (f"smax({d},-({cut}),{self.k.code});" if smooth
+                               else f"max({d},-({cut}));"))
+        ctx.line("}")
+        return r, m, u
+    def spheres(self):
+        return self.child.spheres()               # a groove only takes away
+    def weight(self):
+        return self.child.weight() + self.stamp.weight()
 
 
 class Cylinder(_Primitive):
@@ -493,6 +929,11 @@ class Cylinder(_Primitive):
         self.radius, self.half, self.rounding = E(radius) - r, E(height) * 0.5 - r, r
     def sdf(self, p):
         return f"sdRoundCyl({p}, {self.radius.code}, {self.half.code}, {self.rounding.code})"
+    def spheres(self):
+        radius, half, r = _const(self.radius), _const(self.half), _const(self.rounding)
+        if None in (radius, half, r):
+            return None
+        return [((0.0, 0.0, 0.0), _length([radius, half]) + r)]
 
 
 class Torus(_Primitive):
@@ -501,6 +942,9 @@ class Torus(_Primitive):
         self.R, self.r = E(radius), E(thickness)
     def sdf(self, p):
         return f"sdTorus({p}, {self.R.code}, {self.r.code})"
+    def spheres(self):
+        R, r = _const(self.R), _const(self.r)
+        return None if None in (R, r) else [((0.0, 0.0, 0.0), R + r)]
 
 
 class Cone(_Primitive):
@@ -509,6 +953,11 @@ class Cone(_Primitive):
         self.r, self.h = E(radius), E(height)
     def sdf(self, p):
         return f"sdCapsule2({p}, vec3(0.0), vec3(0.0,{self.h.code},0.0), {self.r.code}, 0.0)"
+    def spheres(self):
+        r, h = _const(self.r), _const(self.h)
+        if None in (r, h):
+            return None
+        return [((0.0, 0.0, 0.0), r), ((0.0, h, 0.0), 0.0)]
 
 
 class CutCone(_Primitive):
@@ -520,6 +969,11 @@ class CutCone(_Primitive):
     def sdf(self, p):
         return (f"sdCutCone({p}, {self.half.code}, {self.r1.code}, {self.r2.code}, "
                 f"{self.rounding.code})")
+    def spheres(self):
+        r1, r2, half, r = _const(self.r1), _const(self.r2), _const(self.half), _const(self.rounding)
+        if None in (r1, r2, half, r):
+            return None
+        return [((0.0, 0.0, 0.0), _length([max(r1, r2), half]) + r)]
 
 
 # ================================================================== transforms
@@ -532,6 +986,13 @@ class _Move(Shape):
         q = ctx.var("p")
         ctx.line(f"vec3 {q} = {p}-{self.t.code};")
         return self.child.emit(ctx, q, mat)
+    def spheres(self):
+        inner, t = self.child.spheres(), _const(self.t)
+        if inner is None or t is None:
+            return None
+        return [(tuple(a + b for a, b in zip(center, t)), radius) for center, radius in inner]
+    def weight(self):
+        return self.child.weight()
 
 
 class _Rotate(Shape):
@@ -541,6 +1002,24 @@ class _Rotate(Shape):
         q = ctx.var("p")
         ctx.line(f"vec3 {q} = {p}; {q}.{self.plane} = rot2(radians({self.g.code}))*{q}.{self.plane};")
         return ctx.emit_turned(self.child, q, mat)
+    def spheres(self):
+        inner, degrees = self.child.spheres(), _const(self.g)
+        if inner is None:
+            return None
+        if degrees is None:
+            # it turns with t, around the origin: wherever it is, it stays
+            # inside the sphere it sweeps
+            return [((0.0, 0.0, 0.0), max(_length(center) + radius for center, radius in inner))]
+        i, j = ("xyz".index(axis) for axis in self.plane)
+        c, s = math.cos(math.radians(degrees)), math.sin(math.radians(degrees))
+        found = []
+        for center, radius in inner:
+            turned = list(center)
+            turned[i], turned[j] = c * center[i] - s * center[j], s * center[i] + c * center[j]
+            found.append((tuple(turned), radius))
+        return found
+    def weight(self):
+        return self.child.weight()
 
 
 class _Scale(Shape):
@@ -553,6 +1032,13 @@ class _Scale(Shape):
         d2 = ctx.var("d")
         ctx.line(f"float {d2} = {d}*{self.s.code};")     # the distance is scaled too
         return d2, m, u
+    def spheres(self):
+        inner, k = self.child.spheres(), _const(self.s)
+        if inner is None or k is None:
+            return None
+        return [(tuple(c * k for c in center), radius * abs(k)) for center, radius in inner]
+    def weight(self):
+        return self.child.weight()
 
 
 class _Bend(Shape):
@@ -565,6 +1051,8 @@ class _Bend(Shape):
         q = ctx.var("p")
         ctx.line(f"vec3 {q} = {p}; {q}.{self.plane} = rot2(radians({self.g.code})*{p}.y)*{q}.{self.plane};")
         return ctx.emit_turned(self.child, q, mat)
+    def weight(self):
+        return self.child.weight()
 
 
 class _Repeat(Shape):
@@ -638,6 +1126,8 @@ class _Repeat(Shape):
         ctx.line(f"float dc = {cd}; if( dc<{d} ) {{ {d} = dc; {m} = {cm}; {u} = {cu}; }}")
         ctx.line("}")
         return d, m, u
+    def weight(self):
+        return self.child.weight()
 
 
 class _Bound(Shape):
@@ -658,6 +1148,11 @@ class _Bound(Shape):
         ctx.line(f"{d} = {cd}; {m} = {cm}; {u} = {cu};")
         ctx.line("}")
         return d, m, u
+    def spheres(self):
+        c, r = _const(self.c), _const(self.r)
+        return None if None in (c, r) else [(c, r)]
+    def weight(self):
+        return 1                                  # from afar it costs one sphere
 
 
 class _Mirror(Shape):
@@ -670,6 +1165,16 @@ class _Mirror(Shape):
         q = ctx.var("p")
         ctx.line(f"vec3 {q} = {p}; {q}.{self.axis} = abs({q}.{self.axis});")
         return ctx.emit_turned(self.child, q, mat)
+    def spheres(self):
+        inner = self.child.spheres()
+        if inner is None:
+            return None
+        i = "xyz".index(self.axis)
+        # the copy on the other side
+        return inner + [(tuple(-c if k == i else c for k, c in enumerate(center)), radius)
+                        for center, radius in inner]
+    def weight(self):
+        return self.child.weight()
 
 
 # =================================================================== modifiers
@@ -681,6 +1186,13 @@ class _Round(Shape):
         d2 = ctx.var("d")
         ctx.line(f"float {d2} = {d}-{self.r.code};")
         return d2, m, u
+    def spheres(self):
+        inner, r = self.child.spheres(), _const(self.r)
+        if inner is None or r is None:
+            return None
+        return [(center, radius + max(r, 0.0)) for center, radius in inner]
+    def weight(self):
+        return self.child.weight()
 
 
 class _Shell(Shape):
@@ -691,6 +1203,13 @@ class _Shell(Shape):
         d2 = ctx.var("d")
         ctx.line(f"float {d2} = abs({d})-{self.g.code};")
         return d2, m, u
+    def spheres(self):
+        inner, g = self.child.spheres(), _const(self.g)
+        if inner is None or g is None:
+            return None
+        return [(center, radius + abs(g)) for center, radius in inner]
+    def weight(self):
+        return self.child.weight()
 
 
 class _Paint(Shape):
@@ -707,9 +1226,76 @@ class _Paint(Shape):
             return self.child.emit(ctx, p, self.material)
         finally:
             ctx.space = previous
+    def spheres(self):
+        return self.child.spheres()
+    def weight(self):
+        return self.child.weight()
 
 
 # ================================================================ combinations
+class _Patch(Shape):
+    """A shape with a drawing on it. Each layer is a piece of the shape
+    itself, raised a little and painted: (stamp, height, material).
+
+    The shape is computed once for all the layers, and the layers only near
+    it: farther out than `near` the answer is the shape's own distance
+    minus the tallest layer, which is never too long a step."""
+    near = 0.2
+
+    def __init__(self, child, layers):
+        self.child, self.layers = child, layers
+    def emit(self, ctx, p, mat):
+        d, m, u = self.child.emit(ctx, p, mat)
+        tallest = max((E(height) for _, height, _ in self.layers), key=lambda h: _const(h) or 0.0)
+        r, rm, ru = ctx.var("d"), ctx.var("m"), ctx.var("u")
+        ctx.line(f"float {r} = {d}-{tallest.code}; float {rm} = {m}; vec3 {ru} = {u};")
+        ctx.line(f"if( {d}<{_num(self.near)} ) {{")
+        ctx.line(f"{r} = {d};")
+        for stamp, height, material in self.layers:
+            s, _, _ = stamp.emit(ctx, p, mat)
+            layer = ctx.var("d")
+            paint = f" {rm} = {ctx.material_id(material)}.0; {ru} = {p};" if material is not None else ""
+            ctx.line(f"float {layer} = max({d}-{E(height).code}, {s}); "
+                     f"if( {layer}<{r} ) {{ {r} = {layer};{paint} }}")
+        ctx.line("}")
+        return r, rm, ru
+    def spheres(self):
+        inner = self.child.spheres()
+        if inner is None:
+            return None
+        tallest = max((_const(E(height)) or 0.0) for _, height, _ in self.layers)
+        return [(center, radius + tallest) for center, radius in inner]
+    def weight(self):
+        return self.child.weight() + sum(stamp.weight() for stamp, _, _ in self.layers)
+
+
+def _patched(whole, drawing, at, symmetry):
+    """whole with the drawing on its surface (see Shape.patch)."""
+    lift, facing = _lift(drawing), _facing_of(drawing)
+    layers = []
+    for i, layer in enumerate(_layers(drawing, facing)):
+        height = lift * (i + 1)
+        if isinstance(height, float):
+            height = round(height, 9)
+        stamp = _stamp(layer, at, facing)
+        if facing is not None:
+            stamp = _front(stamp, at, facing, drawing)
+        if symmetry is not None:
+            stamp = stamp.mirror(symmetry)
+        layers.append((stamp, height, layer.material))
+    return _Patch(whole, layers)
+
+
+class _Plain(Shape):
+    """A model built without its bounding sphere (see assemble)."""
+    def emit(self, ctx, p, mat):
+        return self.model.build(blended=True).emit(ctx, p, mat)
+    def spheres(self):
+        return self.model.spheres()
+    def weight(self):
+        return self.model.weight()
+
+
 class _Combine(Shape):
     def __init__(self, op, a, b, smooth):
         if not isinstance(b, Shape):
@@ -735,3 +1321,21 @@ class _Combine(Shape):
         else:
             ctx.line(f"float {d} = " + (f"smax({da},{db},{k});" if smooth else f"max({da},{db});"))
         return d, ma, ua
+    def spheres(self):
+        a, b, k = self.a.spheres(), self.b.spheres(), _const(self.k)
+        if self.op == "subtract":
+            return a                              # cutting only takes away
+        if self.op == "intersect":
+            # what is left is inside both: either side will do
+            if a is None or b is None:
+                return a or b
+            return a if _enclose(a)[1] <= _enclose(b)[1] else b
+        if a is None or b is None or k is None:
+            return None
+        found = a + b
+        if len(found) > 3000:                     # too many to carry around
+            found = [_enclose(found)]
+        # a blend swells the shapes a little: a quarter of its radius at most
+        return [(center, radius + abs(k) / 4) for center, radius in found] if k else found
+    def weight(self):
+        return self.a.weight() + self.b.weight()

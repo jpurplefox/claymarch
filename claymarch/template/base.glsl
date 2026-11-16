@@ -17,8 +17,23 @@ float sdEllipsoid( vec3 p, vec3 r )
 {
     float k0 = length(p/r);
     if( k0<1e-4 ) return -min(r.x,min(r.y,r.z));
-    float k1 = length(p/(r*r));
-    return k0*(k0-1.0)/k1;
+    // inside: a quick estimate (exact at the surface) is enough
+    if( k0<1.0 ) return k0*(k0-1.0)/length(p/(r*r));
+    // outside: the real distance. The quick estimate falls far too short
+    // next to thin ellipsoids, which then seem close when they are not
+    // (slow rays, dark bands in the ambient occlusion). The nearest point
+    // is r*r*q/(r*r+l) for the l that puts it on the surface: a few Newton
+    // steps, started on the side from which they cannot overshoot.
+    vec3 q = abs(p), r2 = r*r;
+    vec3 s = r*q - r2;
+    float l = max( s.x, max(s.y,s.z) );
+    for( int i=0; i<5; i++ )
+    {
+        vec3 w = max( r2+l, 1e-6 );
+        vec3 g = r*q/w;
+        l += 0.5*(dot(g,g)-1.0)/dot(g*g,1.0/w);
+    }
+    return length( q - r2*q/(r2+l) );
 }
 float sdBox( vec3 p, vec3 b )
 {
@@ -30,6 +45,15 @@ float sdCapsule2( vec3 p, vec3 a, vec3 b, float ra, float rb )
     vec3 pa = p-a, ba = b-a;
     float h = clamp( dot(pa,ba)/dot(ba,ba), 0.0, 1.0 );
     return length(pa-ba*h) - mix(ra,rb,h);
+}
+// A layer of a flat drawing: distance to the segment from a to a+ba, measured
+// ignoring the direction f (so it is a shape that goes on forever along f).
+// With ba = 0 it is a point: a disc.
+float sdFlat( vec3 p, vec3 a, vec3 ba, vec3 f )
+{
+    vec3 q = p-a; q -= f*dot(q,f);
+    float h = clamp( dot(q,ba)/max(dot(ba,ba),1e-12), 0.0, 1.0 );
+    return length( q-ba*h );
 }
 // Tube along a quadratic Bezier (a parabola arc) from a to b, pulled toward c.
 // Nearest point: coarse search over 8 samples, then 3 Newton steps.
@@ -52,6 +76,13 @@ float sdCurve( vec3 p, vec3 a, vec3 c, vec3 b, float ra, float rb )
     }
     vec3 d = a + t*(2.0*A + t*B) - p;
     return length(d) - mix(ra,rb,t);
+}
+// A curved stroke of a flat drawing: distance to the arc from a to b pulled
+// toward c, measured ignoring the direction f. a, c and b have nothing
+// along f.
+float sdFlatCurve( vec3 p, vec3 a, vec3 c, vec3 b, vec3 f )
+{
+    return sdCurve( p - f*dot(p,f), a, c, b, 0.0, 0.0 );
 }
 // Cone with its tip cut off (flat ends), vertical, centered. h = half height,
 // r1 = bottom radius, r2 = top radius, rr = rounding of the edges.

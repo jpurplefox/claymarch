@@ -18,18 +18,18 @@ To see it, reloading automatically on save:
 """
 from .expr import (E, Expr, P, T, checker, clamp, cos, fbm, floor, fract, length, maximum,
                    minimum, mix, noise, noise_at, sin, smoothstep, step, stripes, vec)
-from .shapes import (Box, Capsule, Cone, Curve, CutCone, Cylinder, Disc, Drawing, Ellipsoid, Material,
-                     Shape, Sphere, Torus, union)
+from .shapes import (Box, Capsule, Cone, Curve, CutCone, Cylinder, Disc, Drawing, Ellipsoid, Line, Material,
+                     Path, Shape, Sphere, Torus, union)
 from .model import Model
 from .scene import Camera, Ground, Light, Scene
 
 __all__ = [
     # shapes
-    "Sphere", "Ellipsoid", "Box", "Capsule", "Curve", "Cylinder", "Torus", "Cone", "CutCone", "Shape", "union",
+    "Sphere", "Ellipsoid", "Box", "Capsule", "Curve", "Path", "Cylinder", "Torus", "Cone", "CutCone", "Shape", "union",
     # classes to subclass
     "Model", "Scene", "Drawing",
     # scene pieces
-    "Camera", "Light", "Ground", "Material", "Disc",
+    "Camera", "Light", "Ground", "Material", "Disc", "Line",
     # expressions (for absolute value and powers use Python's abs(x) and x**n)
     "T", "P", "E", "Expr", "vec",
     "sin", "cos", "minimum", "maximum", "clamp", "fract", "floor", "length",

@@ -41,7 +41,9 @@ class Model(Shape):
     # what the model does when it is a part of another model (default: it is added)
     carve = None                    # a number or True: it is cut out of the parts before it
     join = None                     # a number: it is added, blended with the parts before it
-    bounds = None                   # speed-up: radius, or (center, radius), of a sphere that contains the model
+    # speed-up: a sphere that contains the model. None = worked out from the
+    # parts when it can be; a radius or (center, radius) = this one; False = none
+    bounds = None
 
     def __init__(self, **overrides):
         """Critter(position=(1, 0, 0)) changes a property for this one instance."""
@@ -56,8 +58,12 @@ class Model(Shape):
             v = v(T) if inspect.signature(v).parameters else v()
         return v
 
-    def build(self):
-        """The whole model as one Shape: parts joined, painted, then placed."""
+    def build(self, blended=False):
+        """The whole model as one Shape: parts joined, painted, then placed.
+
+        blended: the model is a part that melts into its neighbors (or cuts
+        them), so it must not wrap itself in a bounding sphere: the sphere
+        would show in the blend."""
         if isinstance(self.parts, (list, tuple)) or self.parts is None:
             parts = collect_parts(self)
         else:
@@ -73,7 +79,14 @@ class Model(Shape):
         # optional bounding sphere, in the model's own space (before size,
         # rotation and position, so it travels with the model)
         bounds = self._value("bounds")
-        if bounds is not None:
+        if bounds is None:
+            # nobody said: work it out, when the model is worth skipping,
+            # it is known how much room it takes, and nothing blends with it
+            found = None if blended or shape.weight() < 4 else shape.extent()
+            if found is not None:
+                center, radius = found
+                shape = _Bound(shape, tuple(round(c, 4) for c in center), round(radius * 1.02 + 0.005, 4))
+        elif bounds is not False:
             center, radius = bounds if isinstance(bounds, (tuple, list)) else ((0.0, 0.0, 0.0), bounds)
             shape = _Bound(shape, center, radius)
 
@@ -89,3 +102,9 @@ class Model(Shape):
 
     def emit(self, ctx, p, mat):
         return self.build().emit(ctx, p, mat)
+
+    def spheres(self):
+        return self.build(blended=True).spheres()
+
+    def weight(self):
+        return self.build(blended=True).weight()

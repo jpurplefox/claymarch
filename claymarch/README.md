@@ -93,6 +93,7 @@ All of them are centered at the origin unless noted.
 | `Box(width=1, height=1, depth=1, rounding=0)` | full sizes | `rounding` rounds the edges without growing the box |
 | `Capsule(start=(0,0,0), end=(0,1,0), radius=0.2, radius2=None)` | a thick segment | with `radius2` it tapers towards `end` |
 | `Curve(start=(0,0,0), control=(0,1,0), end=(1,1,0), radius=0.2, radius2=None)` | a thick curved line | a parabola arc from `start` to `end`; `control` is where it bulges towards (the curve does not pass through it). With `radius2` it tapers |
+| `Path(points, radius=0.1, closed=False, radius2=None)` | a tube that follows a list of points | a chain of `Curve`s. With `radius2` it tapers from the first point to the last, the same amount on every bend (not on a closed one); without it the thickness is the same all along. `points` is a list of `(x, y, z)`, two or more. The tube starts at the first point and ends at the last; each point in between is where it is pulled towards, one bend for each (like the `control` of a `Curve`, it does not pass through them). With three points it is exactly a `Curve`. `closed=True` makes a loop (three or more points): every point pulls and none is touched. The points are plain numbers: they cannot change with `t` |
 | `Cylinder(radius=0.5, height=1, rounding=0)` | vertical | |
 | `Torus(radius=0.5, thickness=0.15)` | lying flat (vertical axis) | |
 | `Cone(radius=0.3, height=1)` | base at the origin, tip pointing up | the base is rounded |
@@ -194,10 +195,24 @@ Besides the common [properties](#properties), a `Model` has:
 |---|---|---|
 | `smooth` | `0.0` | the radius the parts blend into each other with: with `0` they meet at a sharp edge, with `0.1` they melt together like clay |
 | `material` | `None` | the material for the parts that have none of their own |
-| `bounds` | `None` | an optional speed-up: the radius, or `(center, radius)`, of a sphere that contains the whole model (in its own space, before `size`/`rotation`/`position`). Far from the sphere the model is not computed. It does not change the picture if the sphere really contains it; if it is too small, the model is clipped. Shadows and occlusion ignore the sphere. Do not use it on parts that blend with others through `smooth` |
+| `bounds` | `None` | a speed-up: a sphere that contains the whole model (in its own space, before `size`/`rotation`/`position`). Far from the sphere the model is not computed. Left at `None` the sphere is worked out from the parts, so there is nothing to write. A radius, or `(center, radius)`, sets it by hand: it does not change the picture if the sphere really contains the model; if it is too small, the model is clipped. `False` leaves the model without a sphere. Shadows and occlusion ignore the sphere |
 
 Internal order: the parts are put together → painted → `bounds` → `size` →
 `rotation` → `position` → `bend` → `symmetry`.
+
+The sphere is worked out on its own when:
+
+- every measure of the parts is a plain number. A part whose `position` or
+  `size` changes with `t`, a `bend` or a repetition leaves the model (and
+  the models that contain it) without a sphere; a `rotation` that changes
+  with `t` does not, because the part stays inside the sphere it sweeps;
+- the model is simply added to its neighbors. A model that blends with them
+  (the `smooth` of the model it is a part of, or its own `join`) or that is
+  carved out of them gets none: the sphere would show in the blend;
+- it is worth it: a model made of one or two simple shapes gets none.
+
+For a model the library cannot measure, a `bounds` written by hand still
+works as before.
 
 ### The role of each part
 
@@ -231,6 +246,7 @@ class Mug(claymarch.Model):
 | `carve=0.01` | it is cut out of everything before it. The number softens the edge of the cut; `carve=True` leaves it sharp |
 | `join=0.03` | it is added, blended with what came before, with that radius instead of the model's `smooth`. `join=0` adds it without blending |
 | `patch=(x, y, z)` | only for `Disc` and `Drawing`: it is drawn on what came before, at that point (see [Drawings on a surface](#drawings-on-a-surface)) |
+| `engrave=(x, y, z)` | only for `Drawing`: it is sunk into what came before, at that point (see [Drawings on a surface](#drawings-on-a-surface)) |
 
 - **Order matters.** In `Mug` the handle comes after the hollow: if it came
   before, the hollow would cut into it too.
@@ -310,7 +326,9 @@ class Buoy(claymarch.Model):
 | | |
 |---|---|
 | `Disc(radius, inner=0, material=None, at=(0, 0, 0))` | one layer: a disc of that radius. `inner` leaves a hole in the middle (a ring). `at` shifts it from the center of the drawing |
-| `Drawing` | a class to inherit from: its `Disc` attributes are the layers, stacked in the order they are written (the first one at the bottom) |
+| `Line(start, end, width=0.02, material=None)` | one layer: a straight stroke with round ends. `start` and `end` are measured from the center of the drawing: `(x, y, z)`, or `(x, y)` for `z = 0`. Only in a drawing that has a `facing` |
+| `Path(points, radius)` | one layer: a curved stroke, the same `Path` of the shapes table used inside a drawing. Its points are measured from the center of the drawing and `radius` is half the width of the stroke (one plain number, no `radius2`). Like a `Line`, only in a drawing that has a `facing` |
+| `Drawing` | a class to inherit from: its `Disc`, `Line` and `Path` attributes are the layers, stacked in the order they are written (the first one at the bottom). When the layers are easier to compute, a `parts` list (or a method that returns it) replaces the attributes |
 
 Used as a part of a model, `Disc` and `Drawing` accept:
 
@@ -320,6 +338,52 @@ Used as a part of a model, `Disc` and `Drawing` accept:
 | `symmetry="x"` | repeats it on the other side |
 | `lift=0.006` | how far each layer rises above the previous one. In a `Drawing` it can also be set on the class (`lift = 0.004`) |
 | `size=0.8` | `Drawing` only: shrinks or enlarges the whole drawing |
+
+### Engraving
+
+The same drawing can be sunk into the surface instead of painted on it: a
+groove with a floor that follows the surface.
+
+```python
+class Cross(claymarch.Drawing):
+    ring = claymarch.Disc(0.30, inner=0.27)
+    down = claymarch.Line((0, -0.45), (0, 0.45), 0.03)
+    across = claymarch.Line((-0.45, 0), (0.45, 0), 0.03)
+
+    facing = "z"
+    depth = 0.02
+    smooth = 0.01
+
+
+class Lid(claymarch.Model):
+    top = claymarch.Ellipsoid(0.6, 0.5, 0.4)
+    mark = Cross(engrave=(0, 0, 0.4))
+```
+
+A `Drawing` accepts these as well, as keywords or set on the class:
+
+| Property | What it is |
+|---|---|
+| `engrave=(x, y, z)` | instead of `patch`: the point of the surface where the center of the drawing goes, sunk in. The materials of the layers are not used: the groove keeps the color of the piece |
+| `symmetry="x"` | repeats it on the other side. Like the other properties, it can be set on the class |
+| `depth=0.01` | how deep the groove is |
+| `smooth=0` | rounds the edge of the groove |
+| `facing=None` | the direction the drawing looks at, away from the surface: `(x, y, z)`, or one of `"x"`, `"-x"`, `"y"`, `"-y"`, `"z"`, `"-z"`. It works for `patch` too |
+| `reach=None` | with `facing`: how far behind its point the drawing still marks the surface. Left out, it reaches the origin of the piece |
+
+- **Without `facing`** only discs can be drawn. A disc is whatever of the
+  surface is closer to its center than its radius, so it needs no direction
+  and it sits well on any surface.
+- **With `facing`** the drawing is flat and it is stamped on the surface
+  along that direction, like a slide projector would. Lines and paths need it: a
+  drawing with a `Line` or a `Path` and no `facing` is an error. The part of a point
+  that runs along `facing` is ignored.
+- `reach` keeps the drawing from coming out on the other side of the piece.
+  The default suits a piece centered on its origin with the drawing in
+  front of it; in any other case set it (it is an error to leave it out when
+  the point is not in front of the origin).
+- A stamped drawing stretches where the surface turns away from `facing`:
+  a line near the silhouette gets wider.
 
 - It is drawn on **everything** before it in that model, and nothing else.
   That is why it is best written right after its base and not at the end: it
@@ -655,8 +719,8 @@ bends, the outer one turns.
 - Blending of materials in smooth unions.
 - Deformations: twisting, repeating in a ring (around an axis), stretching
   along one axis, bending pieces that are not vertical.
-- Curves with more than one bend (a `Curve` bends only once; several are
-  placed one after another) and flat ribbons.
+- A `Path` with a different thickness at each point, or whose points
+  move with `t`, and flat ribbons.
 - Additional or configurable lights beyond the main one.
 - Several passes: depth of field, outlines.
 - Image textures (there are only computed patterns).
