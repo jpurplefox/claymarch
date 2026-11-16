@@ -33,6 +33,7 @@ class Model(Shape):
     parts = None                    # explicit list of shapes; default: all Shape attributes
     smooth = 0.0                    # transition radius used to join the parts
     material = None                 # Material (instance or class) for parts that have none
+    ripple = None                   # (height, size) or (height, size, flow): a lumpy surface that moves
     size = 1.0                      # uniform scale
     rotation = (0.0, 0.0, 0.0)      # degrees around x, y, z
     position = (0.0, 0.0, 0.0)
@@ -94,7 +95,7 @@ class Model(Shape):
         # Transforms left at their neutral value add no code to the shader.
         return place(shape, size=self._value("size"), rotation=self._value("rotation"),
                      position=self._value("position"), bend=self._value("bend"),
-                     symmetry=self._value("symmetry"))
+                     symmetry=self._value("symmetry"), ripple=self._value("ripple"))
 
     @property
     def _role(self):

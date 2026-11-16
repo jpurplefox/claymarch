@@ -122,6 +122,7 @@ it is used: `Lamp(position=(1, 0, 0))`).
 | Property | Default | What it is |
 |---|---|---|
 | `material` | `None` | what it is painted with (a `Material`, instance or class) |
+| `ripple` | `None` | an uneven surface that moves: `(height, size)` or `(height, size, flow)`. Lumps about `size` across rise and sink up to `height / 2`; `flow` is how fast they travel, `(x, y, z)` in units per second |
 | `size` | `1.0` | uniform scale |
 | `rotation` | `(0, 0, 0)` | degrees around x, y, z (applied in that order) |
 | `position` | `(0, 0, 0)` | where it goes |
@@ -131,8 +132,8 @@ it is used: `Lamp(position=(1, 0, 0))`).
 | `join` | `None` | the role of the piece inside a model: it is added, blended |
 
 **They are always applied in that order**, no matter how they are written:
-first it is painted, then `size`, `rotation`, `position`, `bend` and
-`symmetry`.
+first it is painted, then `ripple`, `size`, `rotation`, `position`, `bend`
+and `symmetry`.
 
 - Painting comes before placing: textures stay glued to the piece and move
   with it.
@@ -438,6 +439,7 @@ dark = claymarch.Material(color=(0.10, 0.10, 0.13), specular=0.9, shininess=80)
 | `shininess` | `32.0` | how small and sharp that highlight is |
 | `glow` | `0.0` | light of its own |
 | `bump` | `None` | relief: how much the surface sinks (+) or rises (−) |
+| `opacity` | `1.0` | `1` is solid; less lets what is behind show through, tinted with the color and a little bent, like water or glass. `0` leaves only the highlights |
 
 A material only knows those names. Any other attribute (`base = ...`) is
 yours: a method can read it with `self.base`, but on its own it changes
@@ -447,6 +449,19 @@ nothing.
 the equivalent of a normal map). Use small values, between `0.001` and
 `0.01`. The number that multiplies `p` is the grain size (larger = finer);
 the one that multiplies the noise is the depth.
+
+**`opacity`** makes a see-through material. Only the first see-through
+surface a ray meets is drawn: what is behind it is seen as if the other
+see-through things were not there, so water behind water does not show.
+The piece still casts its whole shadow.
+
+```python
+class Water(claymarch.Material):
+    color = (0.45, 0.78, 0.98)
+    specular = 1.0
+    shininess = 90.0
+    opacity = 0.3
+```
 
 **`p`** is the position in the space of the piece or model that carries the
 material, before it is placed. All the parts of a model painted by its

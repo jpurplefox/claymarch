@@ -122,7 +122,8 @@ class Scene:
         material_body = "\n".join(
             f"    {'if' if i == 0 else 'else if'}( mat<{i}.5 ) "
             f"{{ col = {vec3(mat.value('color')).code}; ks = {E(mat.value('specular')).code}; "
-            f"se = {E(mat.value('shininess')).code}; emi = {E(mat.value('glow')).code}; }}"
+            f"se = {E(mat.value('shininess')).code}; emi = {E(mat.value('glow')).code}; "
+            f"opa = {E(mat.value('opacity')).code}; }}"
             for i, mat in enumerate(ctx.materials))
 
         bumps = "\n".join(
@@ -178,6 +179,9 @@ _RENDER = r"""
 // Which way the ray being advanced is going (zero when there is no ray, as when
 // normals are computed). Repetitions use it to know how far the cell wall is.
 vec3 gRd = vec3(0.0);
+// True while a ray looks for what is behind a see-through surface: the
+// see-through things are then left out of the scene.
+bool gSolid = false;
 
 // Distance function of the whole scene. Besides the distance it returns
 // which material was hit and the coordinates used to draw it.
@@ -189,9 +193,9 @@ float map( in vec3 p0, out float mat, out vec3 uvw )
 }
 float map( in vec3 p ) { float m; vec3 u; return map(p,m,u); }
 
-void material( in float mat, in vec3 uvw, out vec3 col, out float ks, out float se, out float emi )
+void material( in float mat, in vec3 uvw, out vec3 col, out float ks, out float se, out float emi, out float opa )
 {
-    col = vec3(0.8); ks = 0.2; se = 32.0; emi = 0.0;
+    col = vec3(0.8); ks = 0.2; se = 32.0; emi = 0.0; opa = 1.0;
 //@MATERIAL_BODY
 }
 
@@ -263,22 +267,12 @@ void camera( in vec2 fragCoord, out vec3 ro, out vec3 rd )
     rd = normalize( p.x*uu + p.y*vv + CAM_FL*ww );
 }
 
-vec3 render( in vec3 ro, in vec3 rd )
+// Advance a ray from distance t until it touches something. seen says
+// whether there is a surface to shade there.
+float march( in vec3 ro, in vec3 rd, in float t, out float mat, out vec3 uvw, out bool seen )
 {
-    vec3 sky = mix( BG_BOTTOM, BG_TOP, clamp(0.5+1.5*rd.y,0.0,1.0) );
-    sky = pow(sky,vec3(2.2));
-
-    float t = 0.05, mat = 0.0; vec3 uvw = vec3(0.0); bool hit = false;
+    bool hit = false; mat = 0.0; uvw = vec3(0.0);
     gRd = rd;
-    // The camera may be INSIDE something (a tree trunk, a hill) after orbiting
-    // or zooming out. From inside everything is black, so first walk forward
-    // until the ray is out in the open: the thing is seen as if cut open.
-    for( int i=0; i<24; i++ )
-    {
-        float h = map( ro+t*rd );
-        if( h>0.01 ) break;
-        t += max(-h,0.0) + 0.05;
-    }
     for( int i=0; i<160; i++ )
     {
         float h = map( ro+t*rd, mat, uvw );
@@ -291,13 +285,19 @@ vec3 render( in vec3 ro, in vec3 rd )
     // as a hit instead of letting the sky show through as a bright outline
     // (mat<0: what it was near is not a surface but a bounding sphere or the
     // wall of a repetition cell, so there is nothing to shade)
-    if( !hit && (t>80.0 || mat<-0.5) ) return sky;
+    seen = hit || !(t>80.0 || mat<-0.5);
+    return t;
+}
 
-    vec3 pos = ro + t*rd;
-    vec3 nor = calcNormal(pos);
+// The color of a surface under the light. The highlight comes apart (spe),
+// because on a see-through surface it stays whole while the rest fades.
+vec3 shade( in vec3 pos, in vec3 rd, in float mat, in vec3 uvw,
+            out vec3 nor, out vec3 alb, out vec3 spe, out float opa )
+{
+    nor = calcNormal(pos);
 
-    vec3 alb; float ks, se, emi;
-    material( mat, uvw, alb, ks, se, emi );
+    float ks, se, emi;
+    material( mat, uvw, alb, ks, se, emi, opa );
     alb = pow( max(alb,0.0), vec3(2.2) );      // colors are written as seen on screen
 
     float occ = calcAO(pos,nor);
@@ -314,12 +314,65 @@ vec3 render( in vec3 ro, in vec3 rd )
 
     vec3 col = alb*lin;
     vec3 hal = normalize(LIGHT_DIR-rd);
-    col += ks*pow(clamp(dot(nor,hal),0.0,1.0),se)*dif*LIGHT_COL;           // highlight
+    spe = ks*pow(clamp(dot(nor,hal),0.0,1.0),se)*dif*LIGHT_COL;            // highlight
     col += 0.08*fre*occ;                                                 // rim
     col += alb*emi*2.0;
+    return col;
+}
 
-    // far things fade into the background (so the ground has no hard edge)
-    return mix( col, sky, 1.0-exp(-0.0008*t*t) );
+vec3 skyColor( in vec3 rd )
+{
+    vec3 sky = mix( BG_BOTTOM, BG_TOP, clamp(0.5+1.5*rd.y,0.0,1.0) );
+    return pow(sky,vec3(2.2));
+}
+
+// far things fade into the background (so the ground has no hard edge)
+vec3 fade( in vec3 col, in vec3 sky, in float t ) { return mix( col, sky, 1.0-exp(-0.0008*t*t) ); }
+
+vec3 render( in vec3 ro, in vec3 rd )
+{
+    vec3 sky = skyColor(rd);
+
+    float t = 0.05, mat; vec3 uvw; bool seen;
+    // The camera may be INSIDE something (a tree trunk, a hill) after orbiting
+    // or zooming out. From inside everything is black, so first walk forward
+    // until the ray is out in the open: the thing is seen as if cut open.
+    gRd = rd;
+    for( int i=0; i<24; i++ )
+    {
+        float h = map( ro+t*rd );
+        if( h>0.01 ) break;
+        t += max(-h,0.0) + 0.05;
+    }
+    gRd = vec3(0.0);
+    t = march( ro, rd, t, mat, uvw, seen );
+    if( !seen ) return sky;
+
+    vec3 pos = ro + t*rd;
+    vec3 nor, alb, spe; float opa;
+    vec3 col = shade( pos, rd, mat, uvw, nor, alb, spe, opa );
+    if( opa>0.999 ) return fade( col+spe, sky, t );
+
+    // See-through: the ray goes on, a little bent, through a scene without
+    // the see-through things, and what it finds is tinted with the color.
+    vec3 rd2 = refract( rd, nor, 0.88 );
+    rd2 = dot(rd2,rd2)<0.5 ? rd : normalize(rd2);
+    vec3 sky2 = skyColor(rd2);
+    vec3 behind = sky2;
+    gSolid = true;
+    float matB; vec3 uvwB; bool seen2;
+    float t2 = march( pos, rd2, 0.02, matB, uvwB, seen2 );
+    if( seen2 )
+    {
+        vec3 nor2, alb2, spe2; float opa2;
+        behind = shade( pos+t2*rd2, rd2, matB, uvwB, nor2, alb2, spe2, opa2 ) + spe2;
+        behind = fade( behind, sky2, t+t2 );
+    }
+    gSolid = false;
+    float fre = pow( clamp(1.0+dot(nor,rd),0.0,1.0), 3.0 );
+    col = mix( behind*mix(vec3(1.0),alb,0.6), col, opa );
+    col += spe + 0.5*(1.0-opa)*fre*sky;        // the highlight and the sky on its edges
+    return fade( col, sky, t );
 }
 
 void mainImage( out vec4 fragColor, in vec2 fragCoord )

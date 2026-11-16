@@ -37,12 +37,18 @@ class Material:
     bump:      relief texture: how much the surface sinks (positive) or sticks
                out (negative). Use small values (0.001 to 0.01). It only changes
                how light hits, not the silhouette: the equivalent of a "normal map".
+    opacity:   1 = solid; less lets what is behind show through, tinted with
+               the color and a little bent, like water or glass (0 = only the
+               highlights are seen). Only the first see-through surface a
+               ray meets is drawn: what is behind it is seen as if the other
+               see-through things were not there.
     """
     color = (0.8, 0.8, 0.8)
     specular = 0.2
     shininess = 32.0
     glow = 0.0
     bump = None
+    opacity = 1.0
 
     def __init__(self, color=None, **overrides):
         if color is not None:
@@ -58,6 +64,11 @@ class Material:
         if callable(v):
             v = v(*(P, T)[:len(inspect.signature(v).parameters)])
         return v
+
+
+def _see_through(m):
+    """Does this material let what is behind it show?"""
+    return m is not None and not (isinstance(m.opacity, (int, float)) and m.opacity >= 1)
 
 
 def as_material(m):
@@ -194,6 +205,10 @@ class Shape:
     def rotate_y(self, degrees):          return _Rotate(self, "xz", degrees)
     def rotate_z(self, degrees):          return _Rotate(self, "xy", degrees)
     def scale(self, factor):              return _Scale(self, factor)
+    def ripple(self, height, size=0.2, flow=(0.0, 0.0, 0.0)):
+        """Uneven surface that moves: lumps about `size` across that rise and
+        sink up to height/2, traveling at `flow` units per second."""
+        return _Ripple(self, height, size, flow)
     def mirror(self, axis="x"):           return _Mirror(self, axis)
     def bend_x(self, degrees):            return _Bend(self, "yz", degrees)
     def bend_z(self, degrees):            return _Bend(self, "xy", degrees)
@@ -638,7 +653,7 @@ def _as_shape(value):
 # They mean the same as in a Model and are applied in this order.
 # (bend and symmetry are the bend_x / bend_z and mirror methods, under names
 # that do not clash with them.)
-_DECLARED = ("material", "size", "rotation", "position", "bend", "symmetry", "carve", "join")
+_DECLARED = ("material", "ripple", "size", "rotation", "position", "bend", "symmetry", "carve", "join")
 
 
 def _now(value):
@@ -664,12 +679,14 @@ def role_of(carve, join, who):
 
 
 def place(shape, size=1.0, rotation=(0.0, 0.0, 0.0), position=(0.0, 0.0, 0.0),
-          bend=(0.0, 0.0), symmetry=None):
-    """Size, then rotation (x, y, z), then position, then bend (around x,
-    around z), then symmetry. Anything left at its neutral value adds no
-    code to the shader."""
+          bend=(0.0, 0.0), symmetry=None, ripple=None):
+    """Ripple, then size, then rotation (x, y, z), then position, then bend
+    (around x, around z), then symmetry. Anything left at its neutral value
+    adds no code to the shader."""
     bend_x, bend_z = bend
     mirror = symmetry
+    if ripple is not None:
+        shape = shape.ripple(*ripple)
     if not (isinstance(size, (int, float)) and size == 1):
         shape = shape.scale(size)
     rx, ry, rz = rotation
@@ -711,6 +728,10 @@ class _Primitive(Shape, metaclass=_Declarative):
     def emit(self, ctx, p, mat):
         d = ctx.var("d")
         ctx.line(f"float {d} = {self.sdf(p)};")
+        if _see_through(mat):
+            # gSolid: the ray already went through a see-through surface and
+            # now looks for what is behind, so these are not there
+            ctx.line(f"if( gSolid ) {d} = 1e4;")
         return d, f"{ctx.material_id(mat)}.0", ctx.space or p
 
 
@@ -1210,6 +1231,29 @@ class _Shell(Shape):
         return [(center, radius + abs(g)) for center, radius in inner]
     def weight(self):
         return self.child.weight()
+
+
+class _Ripple(Shape):
+    """A shape with a lumpy, moving surface: smooth noise added to its
+    distance. Skipped far from it, where it changes nothing worth the cost."""
+    def __init__(self, child, height, size, flow):
+        if len(flow) != 3:
+            raise TypeError("ripple: flow is a speed in each direction, (x, y, z)")
+        self.child, self.h, self.size, self.flow = child, E(height), E(size), E(tuple(flow))
+    def emit(self, ctx, p, mat):
+        d, m, u = self.child.emit(ctx, p, mat)
+        r = ctx.var("d")
+        ctx.line(f"float {r} = {d};")
+        ctx.line(f"if( {d}<2.0*{self.h.code} ) {r} += {self.h.code}*"
+                 f"(noise3(({p}-{self.flow.code}*iTime)/{self.size.code})-0.5);")
+        return r, m, u
+    def spheres(self):
+        inner, h = self.child.spheres(), _const(self.h)
+        if inner is None or h is None:
+            return None
+        return [(center, radius + abs(h) / 2) for center, radius in inner]
+    def weight(self):
+        return self.child.weight() + 2
 
 
 class _Paint(Shape):
