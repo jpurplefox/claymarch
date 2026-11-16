@@ -112,6 +112,11 @@ class Eye(claymarch.Model):
     symmetry = "x"
 
 
+# Dónde está la boca, medido desde el centro de la cabeza. Lo usan la
+# boca y el chorro de agua.
+MOUTH_AT = (0, -0.20, 0.56)
+
+
 class Skull(claymarch.Model):
     """La forma de la cabeza: más ancha que alta, con cachetes abajo."""
 
@@ -126,7 +131,7 @@ class Skull(claymarch.Model):
     # un elipsoide alargado hacia adentro (el tercer número es el fondo).
     mouth = claymarch.Ellipsoid(
         0.075, 0.075, 0.14,
-        position=(0, -0.20, 0.56),
+        position=MOUTH_AT,
         carve=0.02,
     )
     # La nariz: dos rayitas apenas marcadas arriba de la boca. Cada una es
@@ -566,11 +571,145 @@ class Body(claymarch.Model):
     tail = SwungTail
 
 
+# Hacia dónde y qué tan rápido corre el agua del chorro: hacia adelante
+# y hacia abajo. Lo usan el dibujo del agua y las ondas de la superficie.
+JET_FLOW = (0, -1.5, 2.5)
+
+
+def flowing(p, t, grain):
+    """Ruido que viaja con el agua. grain es qué tan fino es el dibujo."""
+    return claymarch.noise(
+        claymarch.vec(
+            p.x * grain,
+            (p.y - JET_FLOW[1] * t) * grain,
+            (p.z - JET_FLOW[2] * t) * grain,
+        )
+    )
+
+
+class Water(claymarch.Material):
+    """El agua: celeste, brillante y transparente, con vetas apenas más
+    claras y más densas que corren con el chorro."""
+
+    specular = 1.0
+    shininess = 90.0
+
+    def foam(self, p, t):
+        # Entre 0 (agua limpia) y 1 (veta). Los dos primeros números
+        # dicen cuántas vetas hay: más bajos, más vetas.
+        return claymarch.smoothstep(0.50, 0.75, flowing(p, t, 7.0))
+
+    def color(self, p, t):
+        return claymarch.mix(
+            (0.40, 0.75, 0.98), (0.60, 0.87, 1.0), self.foam(p, t)
+        )
+
+    def opacity(self, p, t):
+        # 0 es invisible y 1 es sólido: el agua limpia deja ver lo de
+        # atrás y las vetas lo tapan un poco más.
+        return 0.30 + 0.20 * self.foam(p, t)
+
+    def bump(self, p, t):
+        return 0.008 * flowing(p, t, 16.0)
+
+
+class Foam(claymarch.Material):
+    """La espuma de donde cae el chorro: casi blanca y sólida."""
+
+    color = (0.90, 0.96, 1.0)
+    specular = 0.6
+
+
+# Dónde cae el chorro, medido desde la boca: el piso está 1.74 más abajo.
+JET_LANDS = (0, -1.74, 2.40)
+DROPS = 7  # cuántas gotas saltan de la salpicadura
+
+
+def drop(i):
+    """Una gota de la salpicadura: salta desde donde cae el chorro, hace
+    un arco hacia afuera y vuelve a empezar. Cada una sale para un lado
+    distinto y a destiempo de las demás."""
+    turn = math.radians(360 * i / DROPS + 20)
+    far = 0.45 + 0.20 * (i % 3)  # qué tan lejos llega
+    high = 0.50 + 0.25 * ((i * 2) % 3)  # qué tan alto salta
+
+    def along(t):
+        # De 0 a 1 una y otra vez: en qué parte del salto está.
+        return claymarch.fract(t * 1.3 + i * 0.37)
+
+    def position(t):
+        k = along(t)
+        return (
+            JET_LANDS[0] + math.sin(turn) * far * k,
+            JET_LANDS[1] + 4 * high * k * (1 - k),
+            JET_LANDS[2] + math.cos(turn) * far * k,
+        )
+
+    def size(t):
+        # Se achica mientras vuela.
+        return 1 - 0.6 * along(t)
+
+    return claymarch.Sphere(0.07, size=size, position=position)
+
+
+class WaterJet(claymarch.Model):
+    """El chorro de agua: sale de la boca hacia adelante, sube un poco y
+    cae hasta el piso, donde salpica. Modelado con la boca en el origen.
+    """
+
+    def parts(self):
+        # El chorro es una Curve: va del primer punto (adentro de la
+        # boca) al tercero (donde cae) doblándose hacia el del medio, que
+        # marca qué tan alto y qué tan lejos llega antes de caer. Los dos
+        # últimos números son el grosor al salir y al caer.
+        # ripple le da una superficie despareja que corre con el agua:
+        # cuánto sube y baja, de qué tamaño son las ondas y hacia dónde
+        # van.
+        stream = claymarch.Curve(
+            (0, 0, -0.06), (0, 0.35, 1.10), JET_LANDS,
+            0.06, 0.13,
+            ripple=(0.07, 0.16, JET_FLOW),
+        )
+        # La espuma donde cae: un montículo chato que se mueve.
+        splash = claymarch.Ellipsoid(
+            0.32, 0.10, 0.32,
+            position=JET_LANDS,
+            ripple=(0.08, 0.12, (0, 1.2, 0)),
+            material=Foam,
+        )
+        return [stream, splash, *[drop(i) for i in range(DROPS)]]
+
+    material = Water
+
+    def rotation(self, t):
+        # Se mueve de un lado a otro, como jugando. El primer número es
+        # cuánto se abre hacia los costados; el otro, la velocidad.
+        return (0, 10 * claymarch.sin(t * 2.0), 0)
+
+
+# Dónde va la cabeza: apoya directo sobre el caparazón, sin cuello.
+HEAD_AT = (0, 1.94, 0.35)
+# Cuánto mira hacia arriba, en grados: 0 mira derecho al frente.
+HEAD_TILT = 1
+
+
+def mouth_point():
+    """Dónde queda la boca con la cabeza ya ubicada e inclinada: de ahí
+    sale el chorro."""
+    turn = math.radians(HEAD_TILT)
+    x, y, z = MOUTH_AT
+    # Al mirar hacia arriba, la boca sube y se va un poco hacia atrás.
+    up = y * math.cos(turn) + z * math.sin(turn)
+    forward = z * math.cos(turn) - y * math.sin(turn)
+    return tuple(a + b for a, b in zip(HEAD_AT, (x, up, forward)))
+
+
 class Squirtle(claymarch.Model):
     # size agranda el cuerpo entero respecto de la cabeza.
     body = Body(size=1.4, position=(0, 1.02, 0))
-    # La cabeza apoya directo sobre el caparazón, sin cuello.
-    head = Head(position=(0, 1.94, 0.35))
+    head = Head(position=HEAD_AT, rotation=(-HEAD_TILT, 0, 0))
+    # El chorro sale de la boca.
+    jet = WaterJet(position=mouth_point())
 
 
 class SquirtleScene(claymarch.Scene):
