@@ -93,6 +93,14 @@ class Context:
         self.materials = [base_material]
         self.space = None        # coordinates of the innermost paint() (see _Paint)
         self.turned = 0          # >0 inside a rotation, bend or mirror (see _Repeat)
+        self.swaps = []          # the repaints we are inside of, outermost first (see _Repaint)
+
+    def repainted(self, m):
+        """The material that m is drawn with here: each repaint we are inside
+        of gets its say once, the innermost first."""
+        for swap in reversed(self.swaps):
+            m = swap.get(m, m)
+        return m
 
     def emit_turned(self, child, p, mat):
         """Emit a child whose axes no longer point the way the world's do."""
@@ -1296,9 +1304,29 @@ class _Paint(Shape):
         # The material closest to the leaf wins: one set deeper is not overridden.
         previous, ctx.space = ctx.space, p
         try:
-            return self.child.emit(ctx, p, self.material)
+            return self.child.emit(ctx, p, ctx.repainted(self.material))
         finally:
             ctx.space = previous
+    def spheres(self):
+        return self.child.spheres()
+    def weight(self):
+        return self.child.weight()
+
+
+class _Repaint(Shape):
+    """The same shape with some of its materials swapped for others, however
+    deep inside they were set: {this material: is drawn with this one}."""
+    def __init__(self, child, swap):
+        if not isinstance(swap, dict):
+            raise TypeError("repaint is a dictionary: {a material: the one that replaces it}")
+        self.child = child
+        self.swap = {as_material(old): as_material(new) for old, new in swap.items()}
+    def emit(self, ctx, p, mat):
+        ctx.swaps.append(self.swap)
+        try:
+            return self.child.emit(ctx, p, mat)
+        finally:
+            ctx.swaps.pop()
     def spheres(self):
         return self.child.spheres()
     def weight(self):
@@ -1327,7 +1355,8 @@ class _Patch(Shape):
         for stamp, height, material in self.layers:
             s, _, _ = stamp.emit(ctx, p, mat)
             layer = ctx.var("d")
-            paint = f" {rm} = {ctx.material_id(material)}.0; {ru} = {p};" if material is not None else ""
+            paint = (f" {rm} = {ctx.material_id(ctx.repainted(material))}.0; {ru} = {p};"
+                     if material is not None else "")
             ctx.line(f"float {layer} = max({d}-{E(height).code}, {s}); "
                      f"if( {layer}<{r} ) {{ {r} = {layer};{paint} }}")
         ctx.line("}")

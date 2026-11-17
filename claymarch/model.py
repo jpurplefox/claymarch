@@ -19,7 +19,7 @@ be moved, mirrored or combined like any other shape.
 import inspect
 
 from .expr import T, Expr
-from .shapes import Material, Shape, _Bound, as_material, assemble, collect_parts, place, role_of
+from .shapes import Material, Shape, _Bound, _Repaint, as_material, assemble, collect_parts, place, role_of
 
 
 def _is(value, number):
@@ -33,6 +33,7 @@ class Model(Shape):
     parts = None                    # explicit list of shapes; default: all Shape attributes
     smooth = 0.0                    # transition radius used to join the parts
     material = None                 # Material (instance or class) for parts that have none
+    repaint = None                  # {a material: the one that replaces it}, anywhere inside the model
     ripple = None                   # (height, size) or (height, size, flow): a lumpy surface that moves
     size = 1.0                      # uniform scale
     rotation = (0.0, 0.0, 0.0)      # degrees around x, y, z
@@ -77,6 +78,9 @@ class Model(Shape):
         material = self._value("material")
         if material is not None:
             shape = shape.paint(as_material(material))
+        repaint = self._value("repaint")
+        if repaint:
+            shape = _Repaint(shape, repaint)
 
         # optional bounding sphere, in the model's own space (before size,
         # rotation and position, so it travels with the model)

@@ -211,6 +211,7 @@ Besides the common [properties](#properties), a `Model` has:
 |---|---|---|
 | `smooth` | `0.0` | the radius the parts blend into each other with: with `0` they meet at a sharp edge, with `0.1` they melt together like clay |
 | `material` | `None` | the material for the parts that have none of their own |
+| `repaint` | `None` | the same model with other paint: `{a material: the one that replaces it}`. It reaches every part inside, however deep, so the model itself is not touched (see [The same model, repainted](#the-same-model-repainted)) |
 | `bounds` | `None` | a speed-up: a sphere that contains the whole model (in its own space, before `size`/`rotation`/`position`). Far from the sphere the model is not computed. Left at `None` the sphere is worked out from the parts, so there is nothing to write. A radius, or `(center, radius)`, sets it by hand: it does not change the picture if the sphere really contains the model; if it is too small, the model is clipped. `False` leaves the model without a sphere. Shadows and occlusion ignore the sphere |
 
 Internal order: the parts are put together → painted → `bounds` → `size` →
@@ -229,6 +230,41 @@ The sphere is worked out on its own when:
 
 For a model the library cannot measure, a `bounds` written by hand still
 works as before.
+
+
+### The same model, repainted
+
+`repaint` swaps materials without rewriting the model: wherever one of its
+parts, at any depth, is painted with the material on the left, it is drawn
+with the one on the right.
+
+```python
+brass = claymarch.Material(color=(0.85, 0.65, 0.25), specular=0.8)
+shade = claymarch.Material(color=(0.95, 0.90, 0.80))
+rust = claymarch.Material(color=(0.45, 0.22, 0.12), specular=0.1)
+
+
+class Lamp(claymarch.Model):
+    foot = claymarch.Cylinder(0.3, 0.05, material=brass)
+    stem = claymarch.Capsule((0, 0, 0), (0, 1.2, 0), 0.03, material=brass)
+    hood = claymarch.Sphere(0.3, position=(0, 1.3, 0), material=shade)
+
+
+class OldLamp(Lamp):
+    repaint = {brass: rust}
+
+
+class Room(claymarch.Scene):
+    new = Lamp(position=(-1, 0, 0))
+    old = OldLamp(position=(1, 0, 0))
+    # or, for one instance only: Lamp(repaint={brass: rust})
+```
+
+- Materials are matched by being the same one, not by looking alike: give
+  the material a name (`brass`) and use that name on both sides.
+- A material that is not in the dictionary stays as it is.
+- When a repainted model is inside another repainted model, the inner one
+  swaps first and the outer one swaps what comes out.
 
 ### The role of each part
 
