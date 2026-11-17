@@ -212,6 +212,7 @@ Besides the common [properties](#properties), a `Model` has:
 | `smooth` | `0.0` | the radius the parts blend into each other with: with `0` they meet at a sharp edge, with `0.1` they melt together like clay |
 | `material` | `None` | the material for the parts that have none of their own |
 | `repaint` | `None` | the same model with other paint: `{a material: the one that replaces it}`. It reaches every part inside, however deep, so the model itself is not touched (see [The same model, repainted](#the-same-model-repainted)) |
+| `pose` | `None` | how the pieces inside the model are placed: `{a Model class: {"rotation": ...}}`. It reaches every piece of that class, however deep, so the model itself is not touched (see [The same model, posed](#the-same-model-posed)) |
 | `bounds` | `None` | a speed-up: a sphere that contains the whole model (in its own space, before `size`/`rotation`/`position`). Far from the sphere the model is not computed. Left at `None` the sphere is worked out from the parts, so there is nothing to write. A radius, or `(center, radius)`, sets it by hand: it does not change the picture if the sphere really contains the model; if it is too small, the model is clipped. `False` leaves the model without a sphere. Shadows and occlusion ignore the sphere |
 
 Internal order: the parts are put together → painted → `bounds` → `size` →
@@ -265,6 +266,50 @@ class Room(claymarch.Scene):
 - A material that is not in the dictionary stays as it is.
 - When a repainted model is inside another repainted model, the inner one
   swaps first and the outer one swaps what comes out.
+
+### The same model, posed
+
+`pose` places the pieces inside a model from the outside, without rewriting
+it: every piece of the class on the left, at any depth, gets the placement
+on the right. It is how a model is moved by something that is not the model:
+the model says what it is made of and where each piece hinges; whoever uses
+it says how the pieces turn.
+
+```python
+class Leaf(claymarch.Model):
+    """A gate leaf, hinged at its origin."""
+    board = claymarch.Box(1, 1.2, 0.05, position=(0.5, 0.6, 0))
+
+
+class Gate(claymarch.Model):
+    post = claymarch.Box(0.1, 1.5, 0.1, position=(0, 0.75, 0))
+    leaf = Leaf
+
+
+class Garden(claymarch.Model):
+    gate = Gate(position=(2, 0, 0))
+
+
+class OpenGarden(Garden):
+    pose = {Leaf: {"rotation": (0, 70, 0)}}
+
+
+class SwingingGarden(Garden):
+    def pose(self, t):
+        return {Leaf: {"rotation": (0, 40 * claymarch.sin(t), 0)}}
+
+# or, for one instance only: Garden(pose={Leaf: {"rotation": (0, 70, 0)}})
+```
+
+- Pieces are named by their class, and only models can be named: to move a
+  single box, make it a small `Model` of its own.
+- What can be given is where a piece goes: `size`, `rotation`, `pivot`,
+  `position` and `bend`. Each one replaces the piece's own value; the ones
+  left out stay as they were.
+- A subclass counts as its class: `{Leaf: ...}` also places a `TallLeaf(Leaf)`.
+- The pose of a model is for the pieces inside it, not for the model itself.
+- When a posed model is inside another posed model and both name the same
+  piece, the outer one has the last word.
 
 ### The role of each part
 

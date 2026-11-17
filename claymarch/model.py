@@ -26,6 +26,30 @@ def _is(value, number):
     return isinstance(value, (int, float)) and value == number
 
 
+# The poses of the models being built right now, outermost first (see pose).
+_POSES = []
+_POSABLE = ("size", "rotation", "pivot", "position", "bend")
+
+
+class _Posed(Shape):
+    """A model whose pose reaches the pieces inside it. They are built late,
+    when the shape is walked, so the pose is put back each time it is."""
+    def __init__(self, child, pose):
+        self.child, self.pose = child, pose
+    def _inside(self, walk):
+        _POSES.append(self.pose)
+        try:
+            return walk()
+        finally:
+            _POSES.pop()
+    def emit(self, ctx, p, mat):
+        return self._inside(lambda: self.child.emit(ctx, p, mat))
+    def spheres(self):
+        return self._inside(self.child.spheres)
+    def weight(self):
+        return self._inside(self.child.weight)
+
+
 class Model(Shape):
     _is_model = True
 
@@ -34,6 +58,7 @@ class Model(Shape):
     smooth = 0.0                    # transition radius used to join the parts
     material = None                 # Material (instance or class) for parts that have none
     repaint = None                  # {a material: the one that replaces it}, anywhere inside the model
+    pose = None                     # {a Model class: {"rotation": ...}}: how the pieces inside are placed
     ripple = None                   # (height, size) or (height, size, flow): a lumpy surface that moves
     size = 1.0                      # uniform scale
     rotation = (0.0, 0.0, 0.0)      # degrees around x, y, z
@@ -57,6 +82,15 @@ class Model(Shape):
 
     def _value(self, name):
         v = getattr(self, name)
+        if name in _POSABLE:
+            # a model this one is inside of may say where it goes: the
+            # outermost one that says so has the last word
+            for pose in _POSES:
+                said = [changes[name] for piece, changes in pose.items()
+                        if isinstance(self, piece) and name in changes]
+                if said:
+                    v = said[0]
+                    break
         if callable(v) and not isinstance(v, (Shape, Expr, Material, type)):
             v = v(T) if inspect.signature(v).parameters else v()
         return v
@@ -67,6 +101,36 @@ class Model(Shape):
         blended: the model is a part that melts into its neighbors (or cuts
         them), so it must not wrap itself in a bounding sphere: the sphere
         would show in the blend."""
+        # where the model itself goes is read first: its own pose is for the
+        # pieces inside it, not for itself
+        placement = {name: self._value(name) for name in (*_POSABLE, "symmetry", "ripple")}
+        pose = self._pose()
+        if not pose:
+            return place(self._put_together(blended), **placement)
+        _POSES.append(pose)
+        try:
+            shape = self._put_together(blended)
+        finally:
+            _POSES.pop()
+        return _Posed(place(shape, **placement), pose)
+
+    def _pose(self):
+        pose = self._value("pose")
+        if not pose:
+            return None
+        if not isinstance(pose, dict):
+            raise TypeError("pose is a dictionary: {a Model class: {\"rotation\": ...}}")
+        for piece, changes in pose.items():
+            if not (isinstance(piece, type) and issubclass(piece, Model)):
+                raise TypeError(f"pose: pieces are named by their class (a Model), not {piece!r}")
+            wrong = None if isinstance(changes, dict) else changes
+            wrong = wrong or next((name for name in changes if name not in _POSABLE), None)
+            if wrong is not None:
+                raise TypeError(f"pose: {piece.__name__} can be given {', '.join(_POSABLE)}, not {wrong!r}")
+        return pose
+
+    def _put_together(self, blended):
+        """The parts joined and painted, in the model's own space."""
         if isinstance(self.parts, (list, tuple)) or self.parts is None:
             parts = collect_parts(self)
         else:
@@ -96,11 +160,9 @@ class Model(Shape):
             center, radius = bounds if isinstance(bounds, (tuple, list)) else ((0.0, 0.0, 0.0), bounds)
             shape = _Bound(shape, center, radius)
 
-        # painted first, then placed: textures stay glued to the model.
-        # Transforms left at their neutral value add no code to the shader.
-        return place(shape, size=self._value("size"), rotation=self._value("rotation"),
-                     pivot=self._value("pivot"), position=self._value("position"), bend=self._value("bend"),
-                     symmetry=self._value("symmetry"), ripple=self._value("ripple"))
+        # painted first, then placed (in build): textures stay glued to the
+        # model. Transforms left at their neutral value add no code to the shader.
+        return shape
 
     @property
     def _role(self):
