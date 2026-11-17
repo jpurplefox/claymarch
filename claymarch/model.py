@@ -36,6 +36,7 @@ class Model(Shape):
     ripple = None                   # (height, size) or (height, size, flow): a lumpy surface that moves
     size = 1.0                      # uniform scale
     rotation = (0.0, 0.0, 0.0)      # degrees around x, y, z
+    pivot = (0.0, 0.0, 0.0)         # the point of the model that size and rotation act around
     position = (0.0, 0.0, 0.0)
     bend = (0.0, 0.0)               # degrees per unit of height around x and around z, applied after position
     symmetry = None                 # "x", "y" or "z": the model is copied to the other side (see Shape.mirror)
@@ -94,7 +95,7 @@ class Model(Shape):
         # painted first, then placed: textures stay glued to the model.
         # Transforms left at their neutral value add no code to the shader.
         return place(shape, size=self._value("size"), rotation=self._value("rotation"),
-                     position=self._value("position"), bend=self._value("bend"),
+                     pivot=self._value("pivot"), position=self._value("position"), bend=self._value("bend"),
                      symmetry=self._value("symmetry"), ripple=self._value("ripple"))
 
     @property

@@ -1,4 +1,6 @@
 """The scene: shapes plus camera, light, ground and background; generates the GLSL."""
+import hashlib
+import math
 import time
 from pathlib import Path
 
@@ -23,9 +25,56 @@ class Camera:
 
 
 class Light:
-    """Key light (like a sun): it comes FROM that direction."""
-    def __init__(self, direction=(0.5, 0.7, 0.5), color=(1.0, 0.95, 0.85), intensity=1.0):
+    """Key light (like a sun): it comes FROM that direction.
+
+    sun:  more than 0 draws the sun in the sky, where the light comes from:
+          the number is its size (1 is a natural one). Clouds cover it, and
+          whatever mirrors the sky mirrors it too.
+    halo: how strong the glow around that sun is.
+    """
+    def __init__(self, direction=(0.5, 0.7, 0.5), color=(1.0, 0.95, 0.85), intensity=1.0, sun=0.0, halo=1.0):
         self.direction, self.color, self.intensity = direction, color, intensity
+        self.sun, self.halo = sun, halo
+
+    def glsl(self):
+        """The lines that add the sun to the sky color `col`, looking along rd."""
+        if not self.sun:
+            return ""
+        size = float(self.sun)
+        radius = 0.035 * size
+        return "\n".join([
+            "    {",
+            "        float sd = clamp( dot(rd,LIGHT_DIR), 0.0, 1.0 );",
+            f"        float disc = smoothstep( {E(math.cos(radius * 1.25)).code}, {E(math.cos(radius)).code}, sd );",
+            f"        float around = 0.5*pow( sd, {E(200.0 / (size * size)).code} ) + 0.18*pow( sd, 12.0 );",
+            f"        col += (1.0-veil)*LIGHT_COL*{E(self.halo).code}*around;",
+            "        orb = (1.0-veil)*LIGHT_COL*6.0*disc;",
+            "    }",
+        ])
+
+
+class Halo:
+    """A glow hanging in the air around a point, as around a lamp in mist.
+    It does not light anything: it is only seen. What is in front of the
+    point hides it.
+
+    position: where it is, in the scene.
+    color:    of the glow.
+    size:     how far it spreads.
+    strength: how bright it is; it can change with time.
+    """
+    def __init__(self, position, color=(1.0, 0.9, 0.6), size=0.5, strength=1.0):
+        self.position, self.color, self.size, self.strength = position, color, size, strength
+
+    def glsl(self):
+        size = E(self.size).code
+        # a tight bright core plus a faint wide veil; it only shows on rays
+        # that get as far as the point, so what is in front of it hides it
+        # (a margin here would show as a round patch on whatever is near)
+        return (f"    {{ vec3 c = {vec3(self.position).code}-ro; float s = dot(c,rd);\n"
+                f"      float d2 = (dot(c,c)-s*s)/({size}*{size});\n"
+                f"      if( s>0.0 && s<t ) g += {vec3(self.color).code}*({E(self.strength).code})"
+                f"*( exp(-8.0*d2) + 0.35/((1.0+d2)*(1.0+d2)) ); }}")
 
 
 class Ground:
@@ -47,6 +96,43 @@ class Ground:
             color=mix((0.80, 0.82, 0.84), (0.70, 0.72, 0.75), checker(P, 0.5)), specular=0.05)
 
 
+class Clouds:
+    """Clouds painted on the sky. They are part of the background: nothing
+    can go through them, and they show in whatever mirrors the sky.
+
+    cover:  how much of the sky they take, from 0 (none) to 1 (overcast).
+    size:   how big each cloud is (larger = bigger, fewer).
+    speed:  how fast the wind carries them, and direction is where to, as
+            (x, z).
+    color:  the side the light hits; shade is the other side.
+    """
+    def __init__(self, cover=0.45, size=1.0, speed=0.03, direction=(1.0, 0.3),
+                 color=(1.0, 1.0, 1.0), shade=(0.62, 0.68, 0.80)):
+        if len(direction) != 2:
+            raise TypeError("Clouds: direction is where the wind goes, (x, z)")
+        self.cover, self.size, self.speed, self.direction = cover, size, speed, direction
+        self.color, self.shade = color, shade
+
+    def glsl(self):
+        """The lines that paint the clouds over `sky`, looking along rd."""
+        wind = E((self.direction[0], self.direction[1]))
+        return "\n".join([
+            "    if( rd.y>0.01 )",
+            "    {",
+            "        // the clouds are flat, far above: where the ray would meet them",
+            f"        vec2 uv = rd.xz/(rd.y+0.2)/{E(self.size).code} + normalize({wind.code})*{E(self.speed).code}*iTime;",
+            "        float n = fbm3( vec3(uv.x, 0.02*iTime, uv.y) );",
+            f"        float edge = mix( 0.75, 0.30, clamp({E(self.cover).code},0.0,1.0) );",
+            "        float den = smoothstep( edge, edge+0.18, n )*smoothstep( 0.02, 0.25, rd.y );",
+            "        // thinner toward the light means that side is lit",
+            "        vec2 sun = LIGHT_DIR.xz/(length(LIGHT_DIR.xz)+0.001);",
+            "        float lit = clamp( 0.55+3.0*(n-fbm3( vec3(uv.x+0.25*sun.x, 0.02*iTime, uv.y+0.25*sun.y) )), 0.0, 1.0 );",
+            f"        sky = mix( sky, mix({vec3(self.shade).code}, {vec3(self.color).code}, lit), den );",
+            "        veil = den;",
+            "    }",
+        ])
+
+
 class Scene:
     """Everything needed to draw. Two equivalent ways to use it:
 
@@ -65,6 +151,11 @@ class Scene:
     ground = "auto"
     background = ((0.45, 0.62, 0.90), (0.88, 0.90, 0.95))     # (top, bottom)
     ambient = (0.60, 0.75, 1.00)    # fill light: the color of what is in shadow (sky blue outdoors)
+    haze = 1.0                      # how fast far things fade into the background (0 = never)
+    clouds = None                   # Clouds(...) paints clouds on the sky
+    bounce = (1.00, 0.85, 0.70)     # light that comes back up from the ground, onto what faces down
+    fill = None                     # a second Light, softer: it casts no shadows
+    halos = ()                      # Halo(...)s: glows in the air around points
     quality = 1
 
     def __init__(self, *shapes, **options):
@@ -109,11 +200,11 @@ class Scene:
                     # Measured along the ray when there is one (gRd): a ray
                     # going up never reaches the ground, and a nearly level
                     # one is not slowed down by passing just above the hills.
-                    ctx.line(f"float hground = p0.y-{E(ground.top).code}; float mground = -1.0;")
+                    ctx.line(f"float hground = p0.y-({E(ground.top).code}); float mground = -1.0;")
                     ctx.line("float dground = dot(gRd,gRd)<0.5 ? hground : gRd.y>=0.0 ? 1e4 : hground/(-gRd.y);")
                     ctx.line(f"if( hground<0.1 ) {{ dground = {hills}; mground = {gid}.0; }}")
             else:
-                ctx.line(f"float dground = p0.y-{E(height).code}; float mground = {gid}.0;")
+                ctx.line(f"float dground = p0.y-({E(height).code}); float mground = {gid}.0;")
             ctx.line(f"bool isground = dground<{d};")
             d, m, u = f"(isground?dground:{d})", f"(isground?mground:{m})", f"(isground?p0:{u})"
 
@@ -123,7 +214,7 @@ class Scene:
             f"    {'if' if i == 0 else 'else if'}( mat<{i}.5 ) "
             f"{{ col = {vec3(mat.value('color')).code}; ks = {E(mat.value('specular')).code}; "
             f"se = {E(mat.value('shininess')).code}; emi = {E(mat.value('glow')).code}; "
-            f"opa = {E(mat.value('opacity')).code}; }}"
+            f"opa = {E(mat.value('opacity')).code}; rfl = {E(mat.value('reflection')).code}; }}"
             for i, mat in enumerate(ctx.materials))
 
         bumps = "\n".join(
@@ -131,6 +222,7 @@ class Scene:
             for i, mat in enumerate(ctx.materials) if mat.bump is not None)
 
         c, l = self.camera or Camera(), self.light or Light()
+        f = self.fill or Light()
         constants = "\n".join([
             f"const vec3  CAM_TA    = {vec3(c.target).code};",
             f"const float CAM_DIST  = {E(c.distance).code};",
@@ -142,12 +234,19 @@ class Scene:
             f"const vec3  BG_TOP    = {vec3(self.background[0]).code};",
             f"const vec3  BG_BOTTOM = {vec3(self.background[1]).code};",
             f"const vec3  AMBIENT   = {vec3(self.ambient).code};",
+            f"const float HAZE      = 0.0008*{E(self.haze).code};",
+            f"const vec3  BOUNCE    = {vec3(self.bounce).code};",
+            f"const vec3  FILL_DIR  = normalize({vec3(f.direction).code});",
+            f"const vec3  FILL_COL  = {vec3(f.color).code}*{E(f.intensity if self.fill is not None else 0.0).code};",
             f"#define AA {max(1, int(self.quality))}",
         ])
 
         base = (TEMPLATE / "base.glsl").read_text(encoding="utf-8")
         return (base + "\n" + _RENDER
                 .replace("//@CONSTANTS", constants)
+                .replace("//@CLOUDS", self.clouds.glsl() if self.clouds is not None else "")
+                .replace("//@SUN", l.glsl())
+                .replace("//@HALOS", "\n".join(h.glsl() for h in self.halos))
                 .replace("//@MATERIAL_BODY", material_body)
                 .replace("//@BUMPS", bumps)
                 .replace("//@MAP_BODY", map_body)
@@ -162,6 +261,11 @@ class Scene:
         for name in ("index.html", "main.js"):
             (folder / name).write_text((TEMPLATE / name).read_text(encoding="utf-8"), encoding="utf-8")
         (folder / "scene.glsl").write_text(code, encoding="utf-8")
+        # what the page itself is made of: when it changes, an open page is
+        # out of date (it may lack something the new shader needs) and
+        # reloads itself
+        page = "".join((TEMPLATE / name).read_text(encoding="utf-8") for name in ("index.html", "main.js"))
+        (folder / "viewer.txt").write_text(hashlib.sha1(page.encode("utf-8")).hexdigest(), encoding="utf-8")
         # the viewer watches this file to know when to reload
         (folder / "version.txt").write_text(str(time.time_ns()), encoding="utf-8")
         return folder
@@ -193,9 +297,10 @@ float map( in vec3 p0, out float mat, out vec3 uvw )
 }
 float map( in vec3 p ) { float m; vec3 u; return map(p,m,u); }
 
-void material( in float mat, in vec3 uvw, out vec3 col, out float ks, out float se, out float emi, out float opa )
+void material( in float mat, in vec3 uvw, out vec3 col, out float ks, out float se, out float emi,
+               out float opa, out float rfl )
 {
-    col = vec3(0.8); ks = 0.2; se = 32.0; emi = 0.0; opa = 1.0;
+    col = vec3(0.8); ks = 0.2; se = 32.0; emi = 0.0; opa = 1.0; rfl = 0.0;
 //@MATERIAL_BODY
 }
 
@@ -257,7 +362,9 @@ float calcAO( in vec3 pos, in vec3 nor )
 
 void camera( in vec2 fragCoord, out vec3 ro, out vec3 rd )
 {
-    vec2 p = (2.0*fragCoord-iResolution.xy)/iResolution.y;
+    // uShift slides the picture inside the frame without turning the camera;
+    // uLens magnifies it without moving the camera (a longer lens)
+    vec2 p = ((2.0*fragCoord-iResolution.xy)/iResolution.y - uShift)/uLens;
     float yaw = CAM_YAW + uOrbit.x;
     float pit = clamp( CAM_PITCH + uOrbit.y, -1.5, 1.5 );
     ro = CAM_TA + CAM_DIST*uOrbit.z*vec3( sin(yaw)*cos(pit), sin(pit), cos(yaw)*cos(pit) );
@@ -289,6 +396,29 @@ float march( in vec3 ro, in vec3 rd, in float t, out float mat, out vec3 uvw, ou
     return t;
 }
 
+// The sky looking along rd, without the sun's disc, which comes out apart in
+// orb: the haze takes the color of the sky, but the disc is not part of it
+// (it would show through whatever is in front of the sun).
+vec3 skyColor( in vec3 rd, out vec3 orb )
+{
+    orb = vec3(0.0);
+    vec3 sky = mix( BG_BOTTOM, BG_TOP, clamp(0.5+1.5*rd.y,0.0,1.0) );
+    float veil = 0.0;       // how much the clouds cover this part of the sky
+//@CLOUDS
+    vec3 col = pow(sky,vec3(2.2));
+//@SUN
+    return col;
+}
+vec3 skyColor( in vec3 rd ) { vec3 orb; vec3 col = skyColor( rd, orb ); return col+orb; }
+
+// Glows in the air (Halo) that a ray going as far as t passes near.
+vec3 glowAir( in vec3 ro, in vec3 rd, in float t )
+{
+    vec3 g = vec3(0.0);
+//@HALOS
+    return g;
+}
+
 // The color of a surface under the light. The highlight comes apart (spe),
 // because on a see-through surface it stays whole while the rest fades.
 vec3 shade( in vec3 pos, in vec3 rd, in float mat, in vec3 uvw,
@@ -296,8 +426,8 @@ vec3 shade( in vec3 pos, in vec3 rd, in float mat, in vec3 uvw,
 {
     nor = calcNormal(pos);
 
-    float ks, se, emi;
-    material( mat, uvw, alb, ks, se, emi, opa );
+    float ks, se, emi, rfl;
+    material( mat, uvw, alb, ks, se, emi, opa, rfl );
     alb = pow( max(alb,0.0), vec3(2.2) );      // colors are written as seen on screen
 
     float occ = calcAO(pos,nor);
@@ -310,28 +440,32 @@ vec3 shade( in vec3 pos, in vec3 rd, in float mat, in vec3 uvw,
     vec3 lin = vec3(0.0);
     lin += 0.90*LIGHT_COL*dif;                                             // key light
     lin += 0.30*AMBIENT*(0.6+0.4*nor.y)*occ;                             // sky / fill
-    lin += 0.12*vec3(1.00,0.85,0.70)*clamp(0.5-0.5*nor.y,0.0,1.0)*occ;   // bounce from the ground
+    lin += 0.12*BOUNCE*clamp(0.5-0.5*nor.y,0.0,1.0)*occ;                 // bounce from the ground
+    float fil = clamp(dot(nor,FILL_DIR),0.0,1.0)*occ;
+    lin += 0.90*FILL_COL*fil;                                              // second light, no shadows
 
     vec3 col = alb*lin;
     vec3 hal = normalize(LIGHT_DIR-rd);
     spe = ks*pow(clamp(dot(nor,hal),0.0,1.0),se)*dif*LIGHT_COL;            // highlight
+    spe += ks*pow(clamp(dot(nor,normalize(FILL_DIR-rd)),0.0,1.0),se)*fil*FILL_COL;
     col += 0.08*fre*occ;                                                 // rim
     col += alb*emi*2.0;
+    // the sky mirrored on it: faint from the front, strong at a grazing angle
+    if( rfl>0.0 )
+    {
+        float edge = pow( clamp(1.0+dot(nor,rd),0.0,1.0), 5.0 );
+        col = mix( col, skyColor(reflect(rd,nor)), rfl*(0.04+0.96*edge) );
+    }
     return col;
 }
 
-vec3 skyColor( in vec3 rd )
-{
-    vec3 sky = mix( BG_BOTTOM, BG_TOP, clamp(0.5+1.5*rd.y,0.0,1.0) );
-    return pow(sky,vec3(2.2));
-}
-
 // far things fade into the background (so the ground has no hard edge)
-vec3 fade( in vec3 col, in vec3 sky, in float t ) { return mix( col, sky, 1.0-exp(-0.0008*t*t) ); }
+vec3 fade( in vec3 col, in vec3 sky, in float t ) { return mix( col, sky, 1.0-exp(-HAZE*t*t) ); }
 
 vec3 render( in vec3 ro, in vec3 rd )
 {
-    vec3 sky = skyColor(rd);
+    vec3 orb;
+    vec3 sky = skyColor( rd, orb );
 
     float t = 0.05, mat; vec3 uvw; bool seen;
     // The camera may be INSIDE something (a tree trunk, a hill) after orbiting
@@ -346,19 +480,20 @@ vec3 render( in vec3 ro, in vec3 rd )
     }
     gRd = vec3(0.0);
     t = march( ro, rd, t, mat, uvw, seen );
-    if( !seen ) return sky;
+    if( !seen ) return sky + orb + glowAir(ro,rd,1e4);
 
     vec3 pos = ro + t*rd;
     vec3 nor, alb, spe; float opa;
     vec3 col = shade( pos, rd, mat, uvw, nor, alb, spe, opa );
-    if( opa>0.999 ) return fade( col+spe, sky, t );
+    if( opa>0.999 ) return fade( col+spe, sky, t ) + glowAir(ro,rd,t);
 
     // See-through: the ray goes on, a little bent, through a scene without
     // the see-through things, and what it finds is tinted with the color.
     vec3 rd2 = refract( rd, nor, 0.88 );
     rd2 = dot(rd2,rd2)<0.5 ? rd : normalize(rd2);
-    vec3 sky2 = skyColor(rd2);
-    vec3 behind = sky2;
+    vec3 orb2;
+    vec3 sky2 = skyColor( rd2, orb2 );
+    vec3 behind = sky2 + orb2;
     gSolid = true;
     float matB; vec3 uvwB; bool seen2;
     float t2 = march( pos, rd2, 0.02, matB, uvwB, seen2 );
@@ -372,7 +507,7 @@ vec3 render( in vec3 ro, in vec3 rd )
     float fre = pow( clamp(1.0+dot(nor,rd),0.0,1.0), 3.0 );
     col = mix( behind*mix(vec3(1.0),alb,0.6), col, opa );
     col += spe + 0.5*(1.0-opa)*fre*sky;        // the highlight and the sky on its edges
-    return fade( col, sky, t );
+    return fade( col, sky, t ) + glowAir(ro,rd,t);
 }
 
 void mainImage( out vec4 fragColor, in vec2 fragCoord )

@@ -76,6 +76,16 @@ def main():
     ap.add_argument("--fps", type=int, default=30, help="video frames per second (default 30)")
     ap.add_argument("--zoom", type=float, default=1.0, help="video: camera distance factor (bigger = farther)")
     ap.add_argument("--sway", type=float, default=0.0, help="video: degrees the camera sways side to side")
+    ap.add_argument("--yaw", type=float, default=0.0, help="video: degrees the camera is turned sideways from the scene's own")
+    ap.add_argument("--pitch", type=float, default=0.0, help="video: degrees the camera is raised from the scene's own")
+    ap.add_argument("--right", type=float, default=0.0,
+                    help="video: slides the picture to the right inside the frame, as a fraction of its height")
+    ap.add_argument("--up", type=float, default=0.0,
+                    help="video: slides the picture up inside the frame, as a fraction of its height")
+    ap.add_argument("--lens", type=float, default=1.0,
+                    help="video: magnifies the picture without moving the camera (2 = twice as big)")
+    ap.add_argument("--blend", type=float, default=0.0,
+                    help="video: seconds at the end that dissolve into the beginning, so that it loops")
     ap.add_argument("--no-open", action="store_true", help="video: print the link instead of opening the browser")
     args = ap.parse_args()
 
@@ -117,7 +127,8 @@ def main():
         job = {"target": Path(args.video).resolve(), "done": threading.Event(), "saved": None}
         server.video_job = job
         url = (f"http://localhost:{args.port}/?record=1&w={width}&h={height}&seconds={args.seconds}"
-               f"&fps={args.fps}&zoom={args.zoom}&sway={args.sway}")
+               f"&fps={args.fps}&zoom={args.zoom}&sway={args.sway}&yaw={args.yaw}&pitch={args.pitch}"
+               f"&blend={args.blend}&right={args.right}&up={args.up}&lens={args.lens}")
         print(f"drawing {round(args.seconds * args.fps)} frames at {width}x{height} in the browser:\n  {url}\n"
               "keep that tab visible until it says 'saved' (Ctrl+C to cancel)", flush=True)
         if not args.no_open:

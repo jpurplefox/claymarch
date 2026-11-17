@@ -123,8 +123,9 @@ it is used: `Lamp(position=(1, 0, 0))`).
 |---|---|---|
 | `material` | `None` | what it is painted with (a `Material`, instance or class) |
 | `ripple` | `None` | an uneven surface that moves: `(height, size)` or `(height, size, flow)`. Lumps about `size` across rise and sink up to `height / 2`; `flow` is how fast they travel, `(x, y, z)` in units per second |
-| `size` | `1.0` | uniform scale |
+| `size` | `1.0` | uniform scale. At `0` (or below) the piece is not there: it is not drawn, casts no shadow and, as a `carve`, cuts nothing. A size that changes with `t` can reach zero to make a piece appear and vanish |
 | `rotation` | `(0, 0, 0)` | degrees around x, y, z (applied in that order) |
+| `pivot` | `(0, 0, 0)` | the point of the piece that `size` and `rotation` leave where it is: the piece turns and grows around it. It does not move the piece |
 | `position` | `(0, 0, 0)` | where it goes |
 | `bend` | `(0, 0)` | curvature of a vertical piece: degrees per unit of height, `(around x, around z)`. For gentle curves; large values distort the piece |
 | `symmetry` | `None` | `"x"`, `"y"` or `"z"`: whatever is on the positive side of that axis is copied to the negative side. Model one of a pair and get both |
@@ -138,8 +139,22 @@ and `symmetry`.
 - Painting comes before placing: textures stay glued to the piece and move
   with it.
 - `size` and `rotation` act around the origin of the piece. For something to
-  turn from its base (a lever, a lid), model it with the base at the origin
-  and take it to its place with `position`.
+  turn from its base (a lever, a lid), either model it with the base at the
+  origin and take it to its place with `position`, or leave it where it is
+  and say where the base is with `pivot`:
+
+  ```python
+  # a lid that opens from its back edge
+  claymarch.Box(
+      0.8, 0.05, 0.6,
+      position=(0, 0.5, 0),
+      pivot=(0, 0, -0.3),
+      rotation=(-40, 0, 0),
+  )
+  ```
+
+  `pivot` is measured on the piece itself, before `position`. With no
+  `size` or `rotation` it changes nothing.
 - `bend` comes after `position`: it curves the piece once placed, according
   to its height.
 - For `symmetry`, the piece has to end up on the **positive** side of the
@@ -439,6 +454,7 @@ dark = claymarch.Material(color=(0.10, 0.10, 0.13), specular=0.9, shininess=80)
 | `shininess` | `32.0` | how small and sharp that highlight is |
 | `glow` | `0.0` | light of its own |
 | `bump` | `None` | relief: how much the surface sinks (+) or rises (−) |
+| `reflection` | `0.0` | how much of the sky it mirrors: barely when seen from the front, fully at a grazing angle, like water or polished things. Above `1` it is not what a real surface does, and it is allowed: the mirrored sky outshines the color, for things meant to look unreal |
 | `opacity` | `1.0` | `1` is solid; less lets what is behind show through, tinted with the color and a little bent, like water or glass. `0` leaves only the highlights |
 
 A material only knows those names. Any other attribute (`base = ...`) is
@@ -500,9 +516,13 @@ become vectors on their own.
 
 All of them are used as `claymarch.sin(...)`.
 
+`sin`, `cos` and `radians` of a plain number give a plain number, worked out
+in Python; of a formula (something with `t` or `p` in it), a formula.
+
 | Function | Returns |
 |---|---|
 | `sin(x)`, `cos(x)` | sine and cosine (in radians) |
+| `radians(x)` | degrees to radians, for `sin` and `cos` |
 | `minimum(a, b)`, `maximum(a, b)` | the smaller / the larger |
 | `clamp(x, lo, hi)` | `x` limited to that range |
 | `fract(x)` | the fractional part (useful for repeating) |
@@ -552,16 +572,24 @@ Useful to start a file from scratch with the viewer already open.
 | `ground` | a grey checkerboard at `y=0` | `None` removes it; `Ground(height=..., material=...)` changes it |
 | `background` | light blue | `(top_color, bottom_color)` |
 | `ambient` | sky blue `(0.60, 0.75, 1.00)` | the color of the fill light: the tone of whatever is in shadow. Warm for interiors |
+| `clouds` | `None` | `Clouds(...)` paints clouds on the sky |
+| `fill` | `None` | a second `Light(...)`, softer than the main one: it lights and makes highlights but casts no shadows, and its `sun` is not drawn. For a glow that comes from outside the picture: a city, a fire, a window |
+| `bounce` | warm `(1.00, 0.85, 0.70)` | the color of the light that comes back up from the ground, onto whatever faces down. Blue-green over water, green over grass |
+| `halos` | `()` | a list of `Halo(...)`: glows in the air |
+| `haze` | `1.0` | how fast far things fade into the background. Lower for wide open views where the horizon should stay sharp; `0` never fades |
 | `quality` | `1` | `2` smooths the edges (4 times slower) |
 
 | Class | Parameters (default) |
 |---|---|
 | `Camera` | `target=(0, 0.5, 0)` (the point it looks at), `distance=4.0`, `yaw=25` (turn around that point, sideways), `pitch=15` (elevation: 0 looks straight on, higher looks from above), `lens=2.0` (larger = more zoom, less perspective) |
-| `Light` | `direction=(0.5, 0.7, 0.5)` (where it comes from), `color=(1.0, 0.95, 0.85)`, `intensity=1.0` |
+| `Light` | `direction=(0.5, 0.7, 0.5)` (where it comes from), `color=(1.0, 0.95, 0.85)`, `intensity=1.0`. `sun=0.0`: above 0 draws the sun in the sky where the light comes from, and the number is its size (`1` is a natural one); clouds cover it and whatever mirrors the sky mirrors it. `halo=1.0` is how strong the glow around it is |
+| `Halo` | a glow hanging in the air around a point, as around a lamp in mist: `position`, `color=(1.0, 0.9, 0.6)`, `size=0.5` (how far it spreads), `strength=1.0` (it can change with time). It lights nothing, it is only seen, and what is in front of the point hides it |
 | `Ground` | `height=0.0`, `material=None`. `height` can also be a function of the position, for a hilly ground: `Ground(height=lambda p: 0.5 * claymarch.noise(p * 0.2))` (use `p.x` and `p.z`, gentle slopes). With hills, `top=` is an optional speed-up: a height the hills never exceed; above it they are not computed. If it is too low, the hilltops look cut off |
+| `Clouds` | `cover=0.45` (how much of the sky they take, from 0 to 1), `size=1.0` (larger = bigger and fewer), `speed=0.03` and `direction=(1.0, 0.3)` (how fast the wind carries them and where to, as `(x, z)`), `color=(1, 1, 1)` (the lit side), `shade=(0.62, 0.68, 0.80)` (the other side). They are part of the background: nothing goes through them, and they show in whatever mirrors the sky |
 
-Besides the main light, the render adds on its own: sky light, bounce from
-the ground, soft shadows and ambient occlusion. They are not configurable.
+Besides the main light, the render adds on its own: sky light (`ambient`),
+bounce from the ground (`bounce`), soft shadows and ambient occlusion. Only
+their colors can be changed.
 
 ---
 
@@ -593,7 +621,8 @@ in red over the page.
 ### Exporting a video
 
 ```bash
-python -m claymarch file.py --video out.mp4 [--size 1080x1920] [--seconds 8] [--fps 30] [--zoom 1.0] [--sway 0]
+python -m claymarch file.py --video out.mp4 [--size 1080x1920] [--seconds 8] [--fps 30]
+    [--zoom 1.0] [--yaw 0] [--pitch 0] [--right 0] [--up 0] [--lens 1] [--sway 0] [--blend 0]
 ```
 
 It opens a browser tab that draws the video and saves it to `out.mp4`. By
@@ -605,7 +634,11 @@ default it is vertical (1080x1920), meant for a phone.
 | `--seconds` | duration |
 | `--fps` | frames per second |
 | `--zoom` | moves the camera away from (above 1) or closer to (below 1) the scene. Vertical videos usually need it further away, for example `1.5` |
+| `--yaw`, `--pitch` | degrees the camera is turned sideways and raised, counted from the scene's own camera |
+| `--right`, `--up` | slide the picture inside the frame without turning the camera, to balance the composition. A fraction of the frame's height: `--right 0.1` moves everything a tenth of the height to the right; negative goes the other way |
+| `--lens` | magnifies the picture without moving the camera, like a longer lens: `2` shows everything twice as big. Unlike `--zoom`, near and far things keep their sizes relative to each other. `--right` and `--up` are applied after it |
 | `--sway` | degrees the camera swings sideways, there and back, along the video |
+| `--blend` | seconds at the end that dissolve into the beginning, so that the video loops (see below) |
 | `--no-open` | does not open the browser: prints the link to open it by hand |
 
 How it works: first it draws every frame at its exact instant, however long
@@ -613,6 +646,18 @@ that takes (so the video is smooth even if the viewer runs slowly); then it
 plays them back at real speed while recording. The tab has to stay visible
 until it says `saved`. Nothing needs to be installed: the browser does the
 encoding (MP4 with H.264 if supported, WebM otherwise).
+
+**A video that loops.** Two things make the end lead into the beginning:
+
+- Make the animation repeat exactly every `--seconds`. Something that moves
+  with `sin(t * speed)` repeats every `2 * pi / speed` seconds, so with
+  speeds that are whole numbers or end in `.5`, everything repeats every
+  `4 * pi` seconds (about 12.566). For `fract(t * rate)`, use a `rate` that
+  is a whole number of turns divided by the duration.
+- Add `--blend 1.5` for what cannot repeat, like noise that drifts with
+  time. Over those last seconds the picture dissolves into what the scene
+  looked like just before the video started. What repeats exactly is not
+  changed by it; the rest melts instead of jumping.
 
 ---
 

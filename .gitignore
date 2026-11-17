@@ -6,3 +6,6 @@ build/
 
 # Third-party shader whose license forbids redistribution
 selfie-girl/
+
+# Left by pytest
+.pytest_cache/

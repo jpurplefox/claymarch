@@ -6,6 +6,7 @@ is not a number, it is the GLSL expression "(0.1*sin((iTime*3.0)))", which the
 graphics card evaluates every frame. This is how positions and angles are
 animated, and how colors that depend on position are defined.
 """
+import math
 
 
 def _num(x):
@@ -64,7 +65,10 @@ def E(x):
 def _bin(op, a, b):
     a, b = E(a), E(b)
     kind = a.kind if a.kind != "float" else b.kind
-    return Expr(f"({a.code}{op}{b.code})", kind)
+    # a negative number on the right goes in parentheses: "x--0.3" is not
+    # a subtraction in GLSL
+    right = f"({b.code})" if b.code.startswith("-") else b.code
+    return Expr(f"({a.code}{op}{right})", kind)
 
 
 def _fn(name, *args, kind=None):
@@ -86,8 +90,14 @@ P = Expr("uvw", "vec3")      # position where paint() was applied (for drawing m
 
 # ---------------------------------------------------------------- functions
 # Same names as GLSL. For absolute value and powers use Python's abs(x) and x**n.
-def sin(x):             return _fn("sin", x)
-def cos(x):             return _fn("cos", x)
+# sin, cos and radians of a plain number give a plain number, worked out in
+# Python; of a formula, a formula.
+def _plain(x):          return isinstance(x, (int, float)) and not isinstance(x, bool)
+def sin(x):             return math.sin(x) if _plain(x) else _fn("sin", x)
+def cos(x):             return math.cos(x) if _plain(x) else _fn("cos", x)
+def radians(x):
+    """Degrees to radians, for sin() and cos()."""
+    return math.radians(x) if _plain(x) else _fn("radians", x)
 def minimum(a, b):      return _fn("min", a, b)
 def maximum(a, b):      return _fn("max", a, b)
 def clamp(x, lo, hi):   return _fn("clamp", x, lo, hi)

@@ -37,6 +37,9 @@ class Material:
     bump:      relief texture: how much the surface sinks (positive) or sticks
                out (negative). Use small values (0.001 to 0.01). It only changes
                how light hits, not the silhouette: the equivalent of a "normal map".
+    reflection: how much of the sky it mirrors: barely when seen from the
+               front, fully at a grazing angle, like water or polished
+               things (0 = none, 1 = a mirror at the edges).
     opacity:   1 = solid; less lets what is behind show through, tinted with
                the color and a little bent, like water or glass (0 = only the
                highlights are seen). Only the first see-through surface a
@@ -49,6 +52,7 @@ class Material:
     glow = 0.0
     bump = None
     opacity = 1.0
+    reflection = 0.0
 
     def __init__(self, color=None, **overrides):
         if color is not None:
@@ -653,7 +657,7 @@ def _as_shape(value):
 # They mean the same as in a Model and are applied in this order.
 # (bend and symmetry are the bend_x / bend_z and mirror methods, under names
 # that do not clash with them.)
-_DECLARED = ("material", "ripple", "size", "rotation", "position", "bend", "symmetry", "carve", "join")
+_DECLARED = ("material", "ripple", "size", "rotation", "pivot", "position", "bend", "symmetry", "carve", "join")
 
 
 def _now(value):
@@ -679,17 +683,30 @@ def role_of(carve, join, who):
 
 
 def place(shape, size=1.0, rotation=(0.0, 0.0, 0.0), position=(0.0, 0.0, 0.0),
-          bend=(0.0, 0.0), symmetry=None, ripple=None):
+          bend=(0.0, 0.0), symmetry=None, ripple=None, pivot=(0.0, 0.0, 0.0)):
     """Ripple, then size, then rotation (x, y, z), then position, then bend
     (around x, around z), then symmetry. Anything left at its neutral value
-    adds no code to the shader."""
+    adds no code to the shader.
+
+    pivot is the point of the shape that size and rotation leave where it
+    is: they act around it instead of around the origin."""
     bend_x, bend_z = bend
     mirror = symmetry
     if ripple is not None:
         shape = shape.ripple(*ripple)
-    if not (isinstance(size, (int, float)) and size == 1):
-        shape = shape.scale(size)
     rx, ry, rz = rotation
+    grows = not (isinstance(size, (int, float)) and size == 1)
+    turns = not (_zero(rx) and _zero(ry) and _zero(rz))
+    if len(pivot) != 3:
+        raise TypeError("pivot is a point: three numbers, (x, y, z)")
+    # the pivot is taken to the origin, and put back afterwards together
+    # with position; with nothing to turn or grow it changes nothing
+    around = (grows or turns) and not all(_zero(c) for c in pivot)
+    if around:
+        shape = shape.move(tuple(-c for c in pivot))
+        position = tuple(a + b for a, b in zip(pivot, position))
+    if grows:
+        shape = shape.scale(size)
     if not _zero(rx): shape = shape.rotate_x(rx)
     if not _zero(ry): shape = shape.rotate_y(ry)
     if not _zero(rz): shape = shape.rotate_z(rz)
@@ -1043,15 +1060,27 @@ class _Rotate(Shape):
         return self.child.weight()
 
 
+_GONE = 0.0001  # a size this small or smaller: the piece is not there
+
+
 class _Scale(Shape):
     def __init__(self, child, factor):
         self.child, self.s = child, E(factor)
     def emit(self, ctx, p, mat):
-        q = ctx.var("p")
-        ctx.line(f"vec3 {q} = {p}/{self.s.code};")
+        q, d2 = ctx.var("p"), ctx.var("d")
+        k = _const(self.s)
+        if k is not None and k > _GONE:
+            ctx.line(f"vec3 {q} = {p}/{self.s.code};")
+            d, m, u = self.child.emit(ctx, q, mat)
+            ctx.line(f"float {d2} = {d}*{self.s.code};")     # the distance is scaled too
+            return d2, m, u
+        # A size that changes may reach zero, and dividing by zero spoils the
+        # whole picture, not only this piece. At zero (or below) the piece is
+        # not there: it is as far away as anything can be.
+        s = ctx.var("s")
+        ctx.line(f"float {s} = {self.s.code}; vec3 {q} = {p}/max({s}, {_num(_GONE)});")
         d, m, u = self.child.emit(ctx, q, mat)
-        d2 = ctx.var("d")
-        ctx.line(f"float {d2} = {d}*{self.s.code};")     # the distance is scaled too
+        ctx.line(f"float {d2} = {s} > {_num(_GONE)} ? {d}*{s} : 1e4;")
         return d2, m, u
     def spheres(self):
         inner, k = self.child.spheres(), _const(self.s)
