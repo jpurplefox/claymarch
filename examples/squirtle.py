@@ -28,11 +28,11 @@ class Skin(claymarch.Material):
     """La piel: manchas suaves y un grano fino. Las otras texturas del
     cuerpo heredan de esta y cambian los números."""
 
-    base = BLUE  # el color
-    specular = 0.25  # qué tan fuerte es el brillo
+    base = BLUE
+    specular = 0.25
     blotch = 0.08  # cuánto se aclaran y oscurecen las manchas
     blotch_size = 4.0  # más alto, manchas más chicas
-    grain = 0.0012  # qué tan marcado es el grano de la superficie
+    grain = 0.0012
     grain_size = 45.0  # más alto, grano más fino
 
     def color(self, p):
@@ -48,7 +48,7 @@ class Skin(claymarch.Material):
 
 
 class Plate(Skin):
-    """La panza: crema, lisa, con manchas muy suaves."""
+    """La panza."""
 
     base = CREAM
     specular = 0.15
@@ -57,7 +57,7 @@ class Plate(Skin):
 
 
 class Horn(Skin):
-    """El lomo: marrón, con vetas marcadas y áspero, como cuerno."""
+    """El lomo."""
 
     base = BROWN
     specular = 0.15
@@ -68,7 +68,7 @@ class Horn(Skin):
 
 
 class Bone(Skin):
-    """El borde del caparazón: blanco hueso, apenas manchado."""
+    """El borde del caparazón."""
 
     base = WHITE
     blotch = 0.04
@@ -80,18 +80,13 @@ blue = Skin()
 cream = Plate()
 brown = Horn()
 white = Bone()
-# Los ojos son lisos: sin manchas ni grano.
 eye_white = claymarch.Material(color=WHITE, specular=0.25)
 maroon = claymarch.Material(color=MAROON, specular=0.6)
 black = claymarch.Material(color=BLACK, specular=0.6)
 
 
 class Eye(claymarch.Model):
-    """Un ojo: un óvalo blanco en el fondo de la cavidad, con el iris, la
-    pupila y un brillo apoyados encima, uno apenas delante del otro."""
-
-    # Más grande que la cavidad, así la llena. Con z más negativo se
-    # hunde más.
+    # Más grande que la cavidad, así la llena.
     ball = claymarch.Ellipsoid(
         0.19, 0.21, 0.07, position=(0, 0, -0.13), material=eye_white
     )
@@ -107,26 +102,21 @@ class Eye(claymarch.Model):
         material=eye_white,
     )
 
-    # Cuánto se recuesta hacia atrás, en grados, para seguir la curva de
-    # la cabeza.
-    TILT = 12
-    TURN = 30  # cuánto mira hacia el costado, en grados
+    TILT = 12  # se recuesta, para seguir la curva de la cabeza
+    TURN = 30  # mira hacia el costado
 
     rotation = (-TILT, -TURN, 0)
-    # Apenas por fuera de la superficie de la cabeza.
     position = (0.36, 0.05, 0.46)
     symmetry = "x"
 
 
 class Socket(claymarch.Model):
-    """La cavidad de un ojo: un óvalo con la base recta. La cara de abajo
-    de una caja corta el óvalo y le deja esa base."""
+    """La cavidad de un ojo: un óvalo al que una caja le corta la base."""
 
-    SOFT = 0.04  # qué tan redondeado queda el corte
+    SOFT = 0.04
 
     parts = [
         claymarch.Ellipsoid(0.17, 0.20, 0.10)
-        # Con el segundo número de position más alto, la base corta más.
         .intersect(
             claymarch.Box(
                 0.60, 0.40, 0.40,
@@ -137,16 +127,12 @@ class Socket(claymarch.Model):
         )
     ]
 
-    # Va donde va el ojo y gira lo mismo.
     rotation = Eye.rotation
     position = Eye.position
     symmetry = "x"
 
 
 class Skull(claymarch.Model):
-    """La forma de la cabeza: más ancha que alta, con cachetes abajo."""
-
-    # Ancho, alto y fondo de la frente y de los cachetes.
     DOME = (0.60, 0.50, 0.55)
     CHEEKS = (0.56, 0.30, 0.46)
     CHEEKS_AT = (0, -0.19, 0.05)
@@ -154,17 +140,14 @@ class Skull(claymarch.Model):
 
     dome = claymarch.Ellipsoid(*DOME)
     cheeks = claymarch.Ellipsoid(*CHEEKS, position=CHEEKS_AT)
-    # El hocico: sale hacia adelante un poco más que los cachetes.
     muzzle = claymarch.Ellipsoid(0.45, 0.20, 0.3, position=(0, -0.16, 0.30))
     sockets = Socket(carve=0.03)
-    # La boca en forma de o: un hueco alargado hacia adentro.
     mouth = claymarch.Ellipsoid(
         0.075, 0.075, 0.14,
         position=MOUTH_AT,
         carve=0.02,
     )
-    # La nariz: dos cápsulas muy finas que apenas rozan la cara. Con más
-    # z marcan menos.
+    # Apenas rozan la cara: con más z marcan menos.
     nostrils = claymarch.Capsule(
         (0.045, -0.04, 0.565), (0.030, -0.06, 0.58), 0.004,
         symmetry="x",
@@ -181,12 +164,10 @@ class LidEdge(claymarch.Model):
 
     box = claymarch.Box(3, 3, 3, position=(0, 1.5, 0))
 
-    # Dónde queda el borde, en grados: por encima o por debajo de las
-    # cavidades.
     OPEN = 40
     SHUT = -30
 
-    rotation = (-OPEN, 0, 0)  # abierto
+    rotation = (-OPEN, 0, 0)
 
 
 class Lids(claymarch.Model):
@@ -207,51 +188,45 @@ class Lids(claymarch.Model):
 
 
 class Head(claymarch.Model):
-    """La cabeza, con los ojos y los párpados."""
-
     skull = Skull
     eyes = Eye
     lids = Lids
 
     material = blue
-    position = (0, 1.94, 0.35)  # apoyada sobre el caparazón, sin cuello
-    TILT = 10  # cuánto mira hacia arriba, en grados
+    position = (0, 1.94, 0.35)
+    TILT = 10  # mira hacia arriba
     rotation = (-TILT, 0, 0)
 
 
-def rim_point(angle, forward, radius):
-    """Un punto del anillo, a ese ángulo y corrido hacia adelante o atrás.
-    Cuanto más se corre, más se cierra, para seguir apoyado sobre el
-    caparazón."""
-    radius = radius * math.sqrt(1 - (forward / 0.7) ** 2)
+def ring(angle, radius):
+    """El punto (x, y) a ese ángulo (0 es arriba) y esa distancia del
+    centro del caparazón."""
     turn = math.radians(angle)
-    return (radius * math.sin(turn), radius * math.cos(turn), forward)
+    return (radius * math.sin(turn), radius * math.cos(turn))
 
 
-def middle(a, b):
-    return tuple((p + q) / 2 for p, q in zip(a, b))
-
-
-def mirrored(point):
-    """El mismo punto, del otro costado."""
-    x, y, z = point
+def crossing(a, b):
+    """El punto medio entre a y b, pasado al otro costado."""
+    x, y, z = ((p + q) / 2 for p, q in zip(a, b))
     return (-x, y, z)
 
 
-def rim_points(wave, radius):
-    """Los puntos por los que va medio borde, de la nuca a la cola."""
-    # Un poco más afuera que el anillo, para que el tubo no corte camino.
-    pulls = [rim_point(a, f, radius * 1.06) for a, f in wave]
-    # Los extremos cruzan al otro costado, así las dos mitades se
+def rim_points(wave, radius, depth):
+    pulls = []
+    for angle, forward in wave:
+        # Cuanto más se corre hacia adelante o atrás, más se cierra,
+        # para seguir apoyado sobre el caparazón.
+        closer = math.sqrt(1 - (forward / depth) ** 2)
+        pulls.append((*ring(angle, radius * closer), forward))
+    # Empieza y termina del otro costado, así las dos mitades se
     # encuentran en curva y no en punta.
-    start = mirrored(middle(pulls[0], pulls[1]))
-    end = mirrored(middle(pulls[-2], pulls[-1]))
+    start = crossing(pulls[0], pulls[1])
+    end = crossing(pulls[-2], pulls[-1])
     return [start, *pulls, end]
 
 
 class RimSide(claymarch.Model):
-    """Medio borde blanco del caparazón, de la nuca a la cola: un tubo
-    que dobla hacia cada punto de WAVE sin llegar a tocarlo."""
+    """Medio borde blanco del caparazón, de la nuca a la cola."""
 
     # Cada renglón: el ángulo alrededor del caparazón (0 es arriba, 180
     # abajo) y cuánto se va hacia adelante (+) o hacia atrás (-). Tienen
@@ -265,46 +240,40 @@ class RimSide(claymarch.Model):
         (160, 0.10),  # adelante
         (180, -0.12),  # atrás: donde sale la cola
     ]
-    RADIUS = 0.51  # el radio del anillo
-    TUBE = 0.065  # el grosor del tubo
+    RADIUS = 0.51
+    TUBE = 0.065
+    DEPTH = 0.7  # más chico, el borde se cierra más al correrse
+    PULL = 1.06  # los puntos van más afuera, así el tubo no corta camino
 
-    tube = claymarch.Path(rim_points(WAVE, RADIUS), TUBE)
+    tube = claymarch.Path(rim_points(WAVE, RADIUS * PULL, DEPTH), TUBE)
 
     material = white
     symmetry = "x"
-
-
-def around(angle, radius):
-    """El punto (x, y) a ese ángulo (0 es arriba) y esa distancia del
-    centro del lomo."""
-    turn = math.radians(angle)
-    return (radius * math.sin(turn), radius * math.cos(turn))
 
 
 class Grooves(claymarch.Drawing):
     """Lo que comparten las ranuras del lomo y las de la panza."""
 
     WIDTH = 0.014
-    smooth = 0.02  # qué tan redondeado queda el canto
+    smooth = 0.02
     symmetry = "x"
 
 
 class BackGrooves(Grooves):
-    """Las ranuras de medio lomo: medio hexágono y un rayo desde cada
-    esquina hasta el borde. Las esquinas apuntan adonde el borde se va
-    hacia atrás (los renglones negativos de RimSide.WAVE)."""
+    """Medio hexágono y un rayo desde cada esquina hasta el borde. Las
+    esquinas apuntan adonde el borde se va hacia atrás."""
 
-    HEX = 0.24  # el tamaño del hexágono
+    HEX = 0.24
 
     def parts(self):
         angles = [
             angle for angle, forward in RimSide.WAVE if forward < 0
         ]
-        corners = [around(angle, self.HEX) for angle in angles]
+        corners = [ring(angle, self.HEX) for angle in angles]
         sides = list(zip(corners, corners[1:]))
         # Se pasan de largo: el borde tapa lo que sobra.
         rays = [
-            (corner, around(angle, 0.7))
+            (corner, ring(angle, self.reach))
             for corner, angle in zip(corners, angles)
         ]
         return [
@@ -312,16 +281,12 @@ class BackGrooves(Grooves):
             for start, end in sides + rays
         ]
 
-    facing = "-z"  # se mira desde atrás
+    facing = "-z"
     depth = 0.012
-    reach = 0.76  # todo el lomo, hasta debajo del borde
+    reach = 0.76
 
 
 class Back(claymarch.Model):
-    """El lomo marrón, con las placas marcadas por ranuras."""
-
-    # Ancho, alto y cuánto sobresale hacia atrás: casi del tamaño del
-    # anillo.
     DOME = (0.50, 0.52, 0.38)
 
     dome = claymarch.Ellipsoid(*DOME)
@@ -333,10 +298,7 @@ class Back(claymarch.Model):
 
 
 class PlastronGrooves(Grooves):
-    """Las ranuras de media panza."""
-
-    # Cada renglón es una ranura, de un punto (x, y) a otro, medidos
-    # desde el centro de la panza.
+    # Cada renglón: de un punto (x, y) a otro, desde el centro de la panza.
     LINES = [
         ((0, 0.20), (0.60, 0.20)),  # la raya de arriba, de lado a lado
         ((0, 0.20), (0, -0.28)),  # la del medio, de arriba hacia abajo
@@ -352,67 +314,51 @@ class PlastronGrooves(Grooves):
             for start, end in self.LINES
         ]
 
-    facing = "z"  # se mira de frente
+    facing = "z"
     depth = 0.015
-    reach = 0.60  # toda la panza
+    reach = 0.60
 
 
 class Plastron(claymarch.Model):
-    """La panza crema, con las placas marcadas por ranuras."""
-
-    # Ancho, alto y cuánto sobresale hacia adelante.
     BELLY = (0.48, 0.51, 0.30)
 
     belly = claymarch.Ellipsoid(*BELLY)
-    # Talladas desde el punto que más sobresale.
     grooves = PlastronGrooves(engrave=(0, 0, BELLY[2]))
 
     material = cream
     position = (0, 0, 0.08)
 
 
-class Arm(claymarch.Model):
-    """Un brazo: corto y gordito, con dos dedos y un pulgar. El hombro
-    está en el origen, así gira desde ahí."""
+def claw(base, tip):
+    """Un dedo de la mano o del pie: termina en punta."""
+    return claymarch.Capsule(base, tip, 0.040, 0.012)
 
-    # Del hombro, adentro de la cavidad, a la mano.
+
+class Arm(claymarch.Model):
+    """El hombro está en el origen, así gira desde ahí."""
+
     limb = claymarch.Capsule(
         (-0.08, -0.01, -0.06), (0.26, -0.26, 0.10), 0.145, 0.09
     )
-    # La palma: una esfera que apenas muerde la mano. Va antes que los
-    # dedos, así no los corta.
+    # Va antes que los dedos, así no los corta.
     palm = claymarch.Sphere(
         0.12, position=(0.38, -0.38, 0.2), carve=0.08
     )
-    # Dos dedos juntos, de la mano a la punta, del lado del dorso.
-    finger_up = claymarch.Capsule(
-        (0.29, -0.27, 0.06), (0.39, -0.32, 0.03), 0.040, 0.012
-    )
-    finger_down = claymarch.Capsule(
-        (0.27, -0.30, 0.06), (0.35, -0.37, 0.03), 0.040, 0.012
-    )
-    # El pulgar: el número del medio de la punta dice cuánto se abre.
-    thumb = claymarch.Capsule(
-        (0.30, -0.25, 0.12), (0.40, -0.24, 0.15), 0.040, 0.012
-    )
+    finger_up = claw((0.29, -0.27, 0.06), (0.39, -0.32, 0.03))
+    finger_down = claw((0.27, -0.30, 0.06), (0.35, -0.37, 0.03))
+    thumb = claw((0.30, -0.25, 0.12), (0.40, -0.24, 0.15))
 
     smooth = 0.03
     material = blue
-    # Dónde sale del caparazón. Su cavidad va en el mismo lugar.
     position = (0.40, 0.19, 0.18)
     symmetry = "x"
 
 
 class Leg(claymarch.Model):
-    """Una pierna: corta y gruesa, con un pie de tres dedos. La cadera
-    está en el origen.
+    """La cadera está en el origen. El pie llega a y = -0.43, donde está
+    el piso: si la pierna se alarga, hay que subir el cuerpo lo mismo por
+    su size."""
 
-    El pie llega a y = -0.43, donde está el piso visto desde la cadera.
-    Si la pierna se alarga, hay que subir el cuerpo lo mismo por su size.
-    """
-
-    # De la cadera al tobillo, doblándose hacia el punto del medio, que
-    # es hacia dónde apunta la rodilla.
     thigh = claymarch.Curve(
         (-0.05, 0.03, -0.05), (0.06, -0.13, 0.10), (0.0, -0.32, 0.04),
         0.17, 0.13,
@@ -421,15 +367,9 @@ class Leg(claymarch.Model):
     foot = claymarch.Capsule(
         (0.0, -0.35, 0.00), (0.02, -0.36, 0.04), 0.08, 0.07
     )
-    toe_in = claymarch.Capsule(
-        (-0.04, -0.38, 0.06), (-0.07, -0.41, 0.16), 0.040, 0.012
-    )
-    toe_mid = claymarch.Capsule(
-        (0.01, -0.38, 0.07), (0.02, -0.41, 0.18), 0.040, 0.012
-    )
-    toe_out = claymarch.Capsule(
-        (0.06, -0.38, 0.07), (0.10, -0.41, 0.15), 0.040, 0.012
-    )
+    toe_in = claw((-0.04, -0.38, 0.06), (-0.07, -0.41, 0.16))
+    toe_mid = claw((0.01, -0.38, 0.07), (0.02, -0.41, 0.18))
+    toe_out = claw((0.06, -0.38, 0.07), (0.10, -0.41, 0.15))
 
     smooth = 0.08
     material = blue
@@ -466,25 +406,20 @@ def groove_points(groove, width, roundness, stem):
 
 
 class Tail(claymarch.Model):
-    """La cola: un cuello fino que pasa por debajo del borde del
-    caparazón, engorda y termina en una bola. El rulo es una ranura
-    cavada a cada costado. El centro de la bola está en el origen."""
+    """El centro de la bola está en el origen. El rulo es una ranura
+    cavada a cada costado."""
 
-    # La bola: el ancho y el radio visto de perfil. No tiene que pasar
-    # del piso.
+    # La bola no tiene que pasar del piso.
     WIDTH = 0.22
     ROUND = 0.30
-    # El cuello: nace adentro de la panza y pasa por debajo del borde. Si
-    # engorda mucho toca el borde o el piso.
+    # Si el cuello engorda mucho, toca el borde o el piso.
     NECK = (
         (0, -0.03, 0.93), (0, -0.24, 0.85), (0, -0.2, 0.63), 0.09, 0.10
     )
-    # El tallo: sigue desde el cuello y engorda hasta la bola.
     STEM = (
         (0, -0.2, 0.63), (0, -0.15, 0.40), (0, -0.15, 0.05), 0.10, 0.15
     )
-    # La ranura, vista de perfil: cada renglón es un punto (adelante,
-    # arriba) hacia el que tira, medido desde el centro de la bola.
+    # Cada renglón: un punto (adelante, arriba) desde el centro de la bola.
     GROOVE = [
         (0.12, -0.32),  # abajo de todo: donde se unen los dos costados
         (0.12, -0.27),
@@ -496,8 +431,8 @@ class Tail(claymarch.Model):
         (-0.13, 0.00),  # baja por atrás
         (-0.06, -0.06),  # la punta del gancho
     ]
-    GROOVE_TUBE = 0.022  # el grosor del tubo que cava la ranura
-    SWING = 50  # cuánto se va hacia un costado, en grados
+    GROOVE_TUBE = 0.022
+    SWING = 50  # se va hacia un costado
 
     ball = claymarch.Ellipsoid(WIDTH, ROUND, ROUND)
     stem = claymarch.Curve(*STEM, join=0.08)
@@ -516,12 +451,8 @@ class Tail(claymarch.Model):
 
 
 class Shell(claymarch.Model):
-    """El caparazón: la panza adelante, el lomo atrás y un borde blanco
-    entre los dos."""
-
     plastron = Plastron
     back = Back
-    # Las cavidades de donde salen los brazos y las piernas.
     arm_holes = claymarch.Ellipsoid(
         0.13, 0.15, 0.13,
         position=Arm.position,
@@ -539,14 +470,12 @@ class Shell(claymarch.Model):
 
 
 class Body(claymarch.Model):
-    """El cuerpo: el caparazón, los brazos, las piernas y la cola."""
-
     shell = Shell
     arms = Arm
     legs = Leg
     tail = Tail
 
-    size = 1.4  # respecto de la cabeza
+    size = 1.4
     position = (0, 1.02, 0)
 
 
