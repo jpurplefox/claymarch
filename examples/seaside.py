@@ -2,7 +2,8 @@
 
 Para verlo:   python -m claymarch examples/seaside.py --port 8775
 
-Squirtle se importa de squirtle.py tal cual: lo que cambies allá se ve acá.
+Squirtle se importa tal cual: el modelo, de squirtle.py, y sus movimientos
+de siempre, de squirtle_alive.py. Lo que cambies allá se ve acá.
 La piel mojada, las gotas que tiene encima y el chorro de agua que tira por
 la boca son de esta escena.
 Ejes: y es arriba, z es el frente (hacia donde mira), x es el costado.
@@ -11,10 +12,10 @@ import math
 
 import claymarch
 from squirtle import (
-    BACK, BACK_AT, BELLY, BELLY_AT, BLUE, BROWN, CHEEKS, CHEEKS_AT, CREAM,
-    DOME, LOOP, WHITE, Body, Bone, Head, Horn, Plate, Shell, Skin, Squirtle,
-    blue, brown, cream, mouth_point, white,
+    BLUE, BROWN, CREAM, WHITE, Back, Body, Bone, Head, Horn, Plastron, Plate,
+    Shell, Skin, Skull, blue, brown, cream, white,
 )
+from squirtle_alive import LOOP, AliveSquirtle, looking
 
 
 # La altura del mar en calma. Squirtle está parado en y = 0, sobre una roca
@@ -81,7 +82,7 @@ def waves(p):
     # El número que multiplica a p.x y p.z es el tamaño de las manchas:
     # más chico, manchas más grandes.
     # No cambian con el tiempo: así las olas vuelven a quedar igual al
-    # terminar el ciclo (ver LOOP en squirtle.py).
+    # terminar el ciclo (ver LOOP en squirtle_alive.py).
     shift = claymarch.noise(claymarch.vec(p.x * 0.13, 0.0, p.z * 0.13))
     swell = 0.5 + claymarch.noise(
         claymarch.vec(p.x * 0.21 + 7.0, 0.0, p.z * 0.21)
@@ -571,7 +572,7 @@ class Drip(claymarch.Model):
 
     # De dónde cuelga: hacia dónde (90 es el costado, negativo el otro
     # lado) y qué tan abajo del cachete.
-    HANGS_AT = on_surface(CHEEKS, 72, -48, CHEEKS_AT)
+    HANGS_AT = on_surface(Skull.CHEEKS, 72, -48, Skull.CHEEKS_AT)
     EVERY = 2  # cuántas gotas caen por ciclo (un número entero)
 
     def along(self, t):
@@ -626,21 +627,21 @@ class HeadDrops(claymarch.Model):
 
     parts = [
         # En la frente, la coronilla y los costados.
-        bead(DOME, -8, 40, 0.042),
-        bead(DOME, 22, 54, 0.031),
-        bead(DOME, -36, 50, 0.036),
-        bead(DOME, 4, 64, 0.025),
-        bead(DOME, 0, 24, 0.028),
-        bead(DOME, 64, 30, 0.039),
-        bead(DOME, -66, 20, 0.031),
-        bead(DOME, -84, 42, 0.028),
-        bead(DOME, -50, 30, 0.036),
-        bead(DOME, 38, 46, 0.031),
-        bead(DOME, 88, 8, 0.034),
+        bead(Skull.DOME, -8, 40, 0.042),
+        bead(Skull.DOME, 22, 54, 0.031),
+        bead(Skull.DOME, -36, 50, 0.036),
+        bead(Skull.DOME, 4, 64, 0.025),
+        bead(Skull.DOME, 0, 24, 0.028),
+        bead(Skull.DOME, 64, 30, 0.039),
+        bead(Skull.DOME, -66, 20, 0.031),
+        bead(Skull.DOME, -84, 42, 0.028),
+        bead(Skull.DOME, -50, 30, 0.036),
+        bead(Skull.DOME, 38, 46, 0.031),
+        bead(Skull.DOME, 88, 8, 0.034),
         # En los cachetes.
-        bead(CHEEKS, 58, -22, 0.036, CHEEKS_AT),
-        bead(CHEEKS, -44, -34, 0.031, CHEEKS_AT),
-        bead(CHEEKS, -70, -30, 0.031, CHEEKS_AT),
+        bead(Skull.CHEEKS, 58, -22, 0.036, Skull.CHEEKS_AT),
+        bead(Skull.CHEEKS, -44, -34, 0.031, Skull.CHEEKS_AT),
+        bead(Skull.CHEEKS, -70, -30, 0.031, Skull.CHEEKS_AT),
     ]
 
     material = Droplet
@@ -655,20 +656,20 @@ class ShellDrops(claymarch.Model):
 
     parts = [
         # En la panza.
-        bead(BELLY, 14, 34, 0.020, BELLY_AT),
-        bead(BELLY, -24, 6, 0.018, BELLY_AT),
-        bead(BELLY, 28, -22, 0.016, BELLY_AT),
-        bead(BELLY, -8, -38, 0.020, BELLY_AT),
-        bead(BELLY, -30, 24, 0.020, BELLY_AT),
-        bead(BELLY, 6, -6, 0.017, BELLY_AT),
+        bead(Plastron.BELLY, 14, 34, 0.020, Plastron.position),
+        bead(Plastron.BELLY, -24, 6, 0.018, Plastron.position),
+        bead(Plastron.BELLY, 28, -22, 0.016, Plastron.position),
+        bead(Plastron.BELLY, -8, -38, 0.020, Plastron.position),
+        bead(Plastron.BELLY, -30, 24, 0.020, Plastron.position),
+        bead(Plastron.BELLY, 6, -6, 0.017, Plastron.position),
         # En el lomo.
-        bead(BACK, 170, 42, 0.022, BACK_AT),
-        bead(BACK, 205, 20, 0.018, BACK_AT),
-        bead(BACK, 150, -8, 0.020, BACK_AT),
-        bead(BACK, 188, -30, 0.016, BACK_AT),
-        bead(BACK, 196, 44, 0.022, BACK_AT),
-        bead(BACK, 160, 14, 0.020, BACK_AT),
-        bead(BACK, 215, -14, 0.018, BACK_AT),
+        bead(Back.DOME, 170, 42, 0.022, Back.position),
+        bead(Back.DOME, 205, 20, 0.018, Back.position),
+        bead(Back.DOME, 150, -8, 0.020, Back.position),
+        bead(Back.DOME, 188, -30, 0.016, Back.position),
+        bead(Back.DOME, 196, 44, 0.022, Back.position),
+        bead(Back.DOME, 160, 14, 0.020, Back.position),
+        bead(Back.DOME, 215, -14, 0.018, Back.position),
     ]
 
     material = Droplet
@@ -825,6 +826,37 @@ class Spatter(claymarch.Model):
     material = Spray
 
 
+def mouth_point():
+    """Dónde queda la boca con la cabeza ya ubicada e inclinada, mirando
+    al frente."""
+    turn = math.radians(Head.TILT)
+    x, y, z = Skull.MOUTH_AT
+    # Al mirar hacia arriba, la boca sube y se va un poco hacia atrás.
+    up = y * math.cos(turn) + z * math.sin(turn)
+    forward = z * math.cos(turn) - y * math.sin(turn)
+    return tuple(a + b for a, b in zip(Head.position, (x, up, forward)))
+
+
+def mouth_turned(look):
+    """Dónde queda la boca cuando la cabeza gira look grados hacia un
+    costado (un número, o una fórmula si se mueve). Sirve para que algo
+    salga de ella o la siga."""
+    x, up, forward = (a - b for a, b in zip(mouth_point(), Head.position))
+    turn = claymarch.radians(look)
+    return (
+        Head.position[0] - claymarch.sin(turn) * forward,
+        Head.position[1] + up,
+        Head.position[2] + claymarch.cos(turn) * forward,
+    )
+
+
+def sway(t):
+    """Cuánto gira la cabeza hacia los costados en cada momento, en
+    grados: va y viene, como jugando con el chorro. El primer número es
+    cuánto gira hacia cada lado; el otro, la velocidad."""
+    return 10 * claymarch.sin(t * 2.0)
+
+
 class WaterJet(claymarch.Model):
     """El chorro de agua: sale de la boca hacia adelante, sube un poco y
     cae hasta el mar, donde salpica. Modelado con la boca en el origen.
@@ -871,8 +903,16 @@ class WaterJet(claymarch.Model):
     # puede calcular sola: es (centro, radio), medido desde la boca.
     bounds = ((0, -0.85, 1.5), 2.2)
 
+    def position(self, t):
+        # Sale de la boca, y la sigue cuando la cabeza gira.
+        return mouth_turned(sway(t))
 
-class SeaSquirtle(Squirtle):
+    def rotation(self, t):
+        # Gira lo mismo que la cabeza, así sale siempre derecho.
+        return (0, sway(t), 0)
+
+
+class SeaSquirtle(AliveSquirtle):
     """El mismo Squirtle, mojado, salpicado y tirando un chorro de agua al
     mar."""
 
@@ -887,22 +927,12 @@ class SeaSquirtle(Squirtle):
     body = WetBody
     head = WetHead
 
-    def look(self, t):
-        # Mueve la cabeza de un lado a otro, como jugando con el chorro.
-        # El primer número es cuántos grados gira hacia cada lado; el
-        # otro, la velocidad.
-        return 10 * claymarch.sin(t * 2.0)
+    jet = WaterJet
 
-    def jet_turn(self, t):
-        # El chorro gira lo mismo que la cabeza, así sale siempre derecho
-        # de la boca.
-        return (0, self.looking(t), 0)
-
-    def parts(self):
-        # Squirtle, más el chorro: sale de la boca y la sigue cuando la
-        # cabeza gira.
-        jet = WaterJet(position=self.mouth_now, rotation=self.jet_turn)
-        return [*super().parts(), jet]
+    def pose(self, t):
+        # Lo de siempre (parpadea, menea la cola, aletea), más mover la
+        # cabeza de un lado a otro.
+        return {**super().pose(t), **looking(sway(t))}
 
 
 class Seaside(claymarch.Scene):
