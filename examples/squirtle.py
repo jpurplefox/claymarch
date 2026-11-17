@@ -2,7 +2,8 @@
 
 Para verlo:   python -m claymarch examples/squirtle.py
 
-Por ahora solo la cabeza.
+El modelo completo: la cabeza, el caparazón, los brazos, las piernas y
+la cola, mojado y tirando un chorro de agua por la boca.
 Ejes: y es arriba, z es el frente (hacia donde mira), x es el costado.
 """
 import math
@@ -18,17 +19,177 @@ MAROON = (0.42, 0.10, 0.20)
 BLACK = (0.03, 0.03, 0.04)
 
 
+def shade(color, amount):
+    """El mismo color, más oscuro (amount menor que 1) o más claro."""
+    return tuple(min(1.0, c * amount) for c in color)
+
+
+def soaked(color, wet):
+    """El mismo color, mojado: más oscuro y más intenso."""
+    return tuple(c ** (1 + 0.45 * wet) for c in color)
+
+
 class Skin(claymarch.Material):
-    color = BLUE
-    specular = 0.25
+    """La piel: el color no es parejo, tiene manchas suaves apenas más
+    claras y más oscuras, y la superficie tiene un grano fino.
+
+    Está mojada: el color es más oscuro, los brillos son chicos y
+    fuertes, y refleja un poco el cielo.
+
+    Las otras texturas del cuerpo heredan de esta y cambian los números.
+    """
+
+    base = BLUE  # el color
+    wet = 1.0  # 0 es seco: oscurece el color
+    specular = 0.9  # qué tan fuerte es el brillo
+    shininess = 70.0  # más alto, brillo más chico y nítido
+    reflection = 0.25  # cuánto refleja el cielo
+    blotch = 0.08  # cuánto se aclaran y oscurecen las manchas
+    blotch_size = 4.0  # más alto, manchas más chicas
+    grain = 0.0012  # qué tan marcado es el grano de la superficie
+    grain_size = 45.0  # más alto, grano más fino
+
+    def color(self, p):
+        blotches = claymarch.fbm(p * self.blotch_size)
+        base = soaked(self.base, self.wet)
+        return claymarch.mix(
+            shade(base, 1 - self.blotch),
+            shade(base, 1 + self.blotch),
+            blotches,
+        )
+
+    def bump(self, p):
+        return self.grain * claymarch.fbm(p * self.grain_size)
+
+
+class Plate(Skin):
+    """La panza: crema, lisa, con manchas muy suaves."""
+
+    base = CREAM
+    specular = 0.7
+    blotch = 0.15
+    grain = 0.0008
+
+
+class Horn(Skin):
+    """El lomo: marrón, con vetas más marcadas y la superficie áspera,
+    como cuerno."""
+
+    base = BROWN
+    specular = 0.8
+    shininess = 90.0
+    reflection = 0.5
+    blotch = 0.26
+    blotch_size = 7.0
+    grain = 0.004
+    grain_size = 22.0
+
+
+class Bone(Skin):
+    """El borde del caparazón: blanco hueso, apenas manchado."""
+
+    base = WHITE
+    blotch = 0.04
+    grain = 0.0015
+    grain_size = 30.0
 
 
 blue = Skin()
-cream = Skin(color=CREAM, specular=0.15)
-brown = Skin(color=BROWN, specular=0.15)
-white = Skin(color=WHITE)
-maroon = Skin(color=MAROON, specular=0.6)
-black = Skin(color=BLACK, specular=0.6)
+cream = Plate()
+brown = Horn()
+white = Bone()
+# Los ojos son lisos: sin manchas ni grano.
+eye_white = claymarch.Material(color=WHITE, specular=0.25)
+maroon = claymarch.Material(color=MAROON, specular=0.6)
+black = claymarch.Material(color=BLACK, specular=0.6)
+
+
+class Droplet(claymarch.Material):
+    """Una gota de agua apoyada en el cuerpo: casi transparente, deja ver
+    la piel de abajo, con un brillo chico y muy fuerte."""
+
+    color = (0.80, 0.93, 1.0)
+    opacity = 0.08  # 0 es invisible y 1 es sólido
+    specular = 2.5
+    shininess = 260.0
+    reflection = 0.6
+
+
+def outward(heading, height):
+    """Hacia dónde queda un punto de un elipsoide, visto desde su centro.
+
+    heading es hacia dónde, en grados alrededor: 0 es el frente, 90 un
+    costado, 180 atrás. height es qué tan arriba: 0 es el medio, 90
+    arriba de todo, negativo hacia abajo. height puede ser una fórmula
+    (algo que cambia con el tiempo); heading, solo un número.
+    """
+    around, up = math.radians(heading), claymarch.radians(height)
+    flat = claymarch.cos(up)
+    return (
+        flat * math.sin(around),
+        claymarch.sin(up),
+        flat * math.cos(around),
+    )
+
+
+def on_surface(radii, heading, height, centre=(0, 0, 0)):
+    """Un punto sobre un elipsoide de ese tamaño (radii) y ese centro,
+    hacia donde dice outward."""
+    out = outward(heading, height)
+    return tuple(
+        round(c + r * o, 4) for c, r, o in zip(centre, radii, out)
+    )
+
+
+def bead(radii, heading, height, size, centre=(0, 0, 0), run=30):
+    """Una gota sobre un elipsoide (ver on_surface): una bolita medio
+    hundida en la superficie, así asoma solo un casquete.
+
+    No se queda quieta: aparece chiquita, crece, se queda un rato,
+    resbala hacia abajo cada vez más rápido y se pierde; después vuelve a
+    aparecer en su lugar. run es cuánto baja, en grados.
+    """
+    # Cada gota va a destiempo de las demás. Cuánto se atrasa sale de su
+    # lugar, así que no hay que escribirlo.
+    late = (heading * 0.137 + height * 0.291) % 1
+
+    def along(t):
+        # De 0 a 1 una vez por ciclo.
+        return claymarch.fract(t / LOOP + late)
+
+    def slide(t):
+        # La primera parte del tiempo no se mueve (0); después resbala.
+        k = claymarch.maximum(along(t) - 0.45, 0.0) / 0.55
+        return k * k
+
+    def position(t):
+        out = outward(heading, height - run * slide(t))
+        keep = 1 - 0.45 * size / min(radii)
+        return tuple(c + r * keep * o for c, r, o in zip(centre, radii, out))
+
+    def scale(t):
+        k = along(t)
+        grown = claymarch.smoothstep(0.0, 0.30, k)
+        gone = claymarch.smoothstep(0.85, 1.0, k)
+        return grown * (1 - gone)
+
+    return claymarch.Sphere(size, size=scale, position=position)
+
+
+# Cuántos segundos tarda toda la animación en volver a empezar igual. Los
+# movimientos de más abajo dan una cantidad entera de vueltas en ese
+# tiempo, así un video de esa duración se puede repetir sin salto.
+# Con velocidades enteras o terminadas en .5 (sin(t * 2.0), sin(t * 2.5))
+# el ciclo cierra justo en 4 veces pi: unos 12,57 segundos.
+LOOP = 4 * math.pi
+
+
+def sway(t):
+    """Cuánto gira la cabeza hacia los costados en cada momento, en
+    grados: va y viene, como jugando con el chorro. El primer número es
+    cuánto gira hacia cada lado; el otro, la velocidad. El chorro gira lo
+    mismo, así sale siempre derecho de la boca."""
+    return 10 * claymarch.sin(t * 2.0)
 
 
 # Dónde va cada ojo sobre la cabeza. Lo usan la cavidad y el ojo, para que
@@ -80,6 +241,18 @@ class Socket(claymarch.Model):
     symmetry = "x"
 
 
+def blink(t):
+    """Cuánto está cerrado el ojo en cada momento: 0 abierto, 1 cerrado.
+    Casi siempre vale 0, y cada tanto sube a 1 y vuelve enseguida."""
+    # Parpadea una vez cada tantos segundos: tres veces por ciclo.
+    every = LOOP / 3
+    # De 0 a 1 una y otra vez; el parpadeo cae en la mitad.
+    phase = claymarch.fract(t / every)
+    # Los dos números son cuánto dura cerrado y cuánto tarda en cerrar y
+    # abrir, como fracción de ese tiempo.
+    return 1 - claymarch.smoothstep(0.015, 0.045, abs(phase - 0.5))
+
+
 class Eye(claymarch.Model):
     """Un ojo: un óvalo chato y blanco metido en el fondo de la cavidad,
     con el iris, la pupila y un brillo apoyados encima.
@@ -92,7 +265,7 @@ class Eye(claymarch.Model):
 
     # position: qué tan hundido queda. Con z más negativo se mete más.
     ball = claymarch.Ellipsoid(
-        0.19, 0.21, 0.07, position=(0, 0, -0.13), material=white
+        0.19, 0.21, 0.07, position=(0, 0, -0.13), material=eye_white
     )
     iris = claymarch.Ellipsoid(
         0.095, 0.145, 0.010, position=(-0.02, -0.01, -0.060), material=maroon
@@ -102,7 +275,9 @@ class Eye(claymarch.Model):
     )
     # El brillo: grande y arriba, le da la mirada simpática.
     shine = claymarch.Ellipsoid(
-        0.038, 0.038, 0.010, position=(-0.037, 0.07, -0.050), material=white
+        0.038, 0.038, 0.010,
+        position=(-0.037, 0.07, -0.050),
+        material=eye_white,
     )
 
     # Girado para que mire hacia afuera de la cabeza: 0 mira derecho al
@@ -117,11 +292,19 @@ class Eye(claymarch.Model):
 MOUTH_AT = (0, -0.20, 0.56)
 
 
+# Las medidas de la frente y de los cachetes: ancho, alto y fondo, desde
+# el centro. Las usan la cabeza, los párpados y las gotas que se apoyan
+# encima.
+DOME = (0.60, 0.50, 0.55)
+CHEEKS = (0.56, 0.30, 0.46)
+CHEEKS_AT = (0, -0.19, 0.05)
+
+
 class Skull(claymarch.Model):
     """La forma de la cabeza: más ancha que alta, con cachetes abajo."""
 
-    dome = claymarch.Ellipsoid(0.60, 0.50, 0.55)
-    cheeks = claymarch.Ellipsoid(0.56, 0.30, 0.46, position=(0, -0.19, 0.05))
+    dome = claymarch.Ellipsoid(*DOME)
+    cheeks = claymarch.Ellipsoid(*CHEEKS, position=CHEEKS_AT)
     # La zona de la boca: sale hacia adelante un poco más que los cachetes
     # (llega a z = 0.58; los cachetes, a 0.51).
     muzzle = claymarch.Ellipsoid(0.45, 0.20, 0.3, position=(0, -0.16, 0.30))
@@ -146,11 +329,142 @@ class Skull(claymarch.Model):
     smooth = 0.10
 
 
+class LidEdge(claymarch.Model):
+    """Hasta dónde baja el párpado: una caja que deja pasar solo lo que
+    está por encima de su cara de abajo. Esa cara pasa por el centro de
+    la cabeza, que es el origen, y gira alrededor de él: al inclinarse
+    hacia adelante, el borde del párpado baja por los ojos."""
+
+    box = claymarch.Box(3, 3, 3, position=(0, 1.5, 0))
+
+    def rotation(self, t):
+        # Hasta dónde llega el borde del párpado, en grados de altura
+        # vistos desde el centro de la cabeza: abierto queda por encima
+        # de las cavidades; cerrado, por debajo.
+        opened, closed = 40, -30
+        edge = opened + (closed - opened) * blink(t)
+        return (-edge, 0, 0)
+
+
+# Cuánto más chica que la cabeza es la copia que hace de párpado: es lo
+# hundido que queda dentro de la cavidad.
+LID_DEEP = 0.006
+LID = tuple(radius - LID_DEEP for radius in DOME)
+
+
+class Lids(claymarch.Model):
+    """Los párpados de los dos ojos: piel que baja desde arriba y tapa
+    las cavidades.
+
+    Es una copia de la cabeza apenas más chica, así que queda escondida
+    adentro: solo se ve donde la cabeza tiene un hueco, que son las
+    cavidades de los ojos. De esa copia se deja solo lo que LidEdge deja
+    pasar, que es la parte de arriba; cuando su borde baja, el párpado
+    se cierra.
+    """
+
+    parts = [
+        claymarch.Ellipsoid(*LID)
+        .intersect(LidEdge())
+        # Y se le saca la franja del medio, entre los dos ojos, para que
+        # al bajar no tape la nariz ni la boca. El primer número es el
+        # ancho de esa franja.
+        .subtract(claymarch.Box(0.36, 3, 3))
+    ]
+
+
+class Drip(claymarch.Model):
+    """La gota que cae de un costado de la cara: se junta abajo del
+    cachete, se suelta, cae y, después de un rato, vuelve a empezar."""
+
+    # De dónde cuelga: hacia dónde (90 es el costado, negativo el otro
+    # lado) y qué tan abajo del cachete.
+    HANGS_AT = on_surface(CHEEKS, 72, -48, CHEEKS_AT)
+    EVERY = 2  # cuántas gotas caen por ciclo (un número entero)
+
+    def along(self, t):
+        # De 0 a 1 una y otra vez.
+        return claymarch.fract(t * self.EVERY / LOOP)
+
+    def fall(self, t):
+        # Casi todo el tiempo no cae (0); al final se suelta.
+        return claymarch.maximum(self.along(t) - 0.8, 0.0) * 5
+
+    STRETCH = 0.04  # cuánto se estira al caer
+    WOBBLE = 0.005  # cuánto se bambolea hacia los costados
+
+    def drop(self, t):
+        # Dónde está la gota: colgada en su lugar y, al soltarse, cada
+        # vez más abajo.
+        x, y, z = self.HANGS_AT
+        fall = self.fall(t)
+        return (x, y - 0.9 * fall * fall, z)
+
+    def trail(self, t):
+        # La parte de arriba de la gota: quieta está escondida adentro;
+        # al caer se queda atrás, y la gota se estira. También se mueve
+        # un poco de lado a lado.
+        x, y, z = self.drop(t)
+        pull = claymarch.smoothstep(0.0, 0.35, self.fall(t))
+        sideways = self.WOBBLE * pull * claymarch.sin(t * 24.0)
+        return (x + sideways, y + self.STRETCH * pull, z)
+
+    def scale(self, t):
+        # No está, crece mientras se junta y se pierde al final de la
+        # caída.
+        grown = claymarch.smoothstep(0.40, 0.80, self.along(t))
+        gone = claymarch.smoothstep(0.75, 1.0, self.fall(t))
+        return grown * (1 - gone)
+
+    def parts(self):
+        return [
+            claymarch.Sphere(0.032, size=self.scale, position=self.drop),
+            claymarch.Sphere(0.020, size=self.scale, position=self.trail),
+        ]
+
+    smooth = 0.04  # funde las dos partes en una sola gota
+    material = Droplet
+    bounds = ((HANGS_AT[0], HANGS_AT[1] - 0.45, HANGS_AT[2]), 0.55)
+
+
+class HeadDrops(claymarch.Model):
+    """Las gotas de la cabeza. Cada renglón es una: hacia dónde está (0
+    es el frente, 90 un costado), qué tan arriba (0 es el medio de la
+    cabeza) y el tamaño. Se pueden mover, agregar o sacar renglones."""
+
+    parts = [
+        # En la frente, la coronilla y los costados.
+        bead(DOME, -8, 40, 0.042),
+        bead(DOME, 22, 54, 0.031),
+        bead(DOME, -36, 50, 0.036),
+        bead(DOME, 4, 64, 0.025),
+        bead(DOME, 0, 24, 0.028),
+        bead(DOME, 64, 30, 0.039),
+        bead(DOME, -66, 20, 0.031),
+        bead(DOME, -84, 42, 0.028),
+        bead(DOME, -50, 30, 0.036),
+        bead(DOME, 38, 46, 0.031),
+        bead(DOME, 88, 8, 0.034),
+        # En los cachetes.
+        bead(CHEEKS, 58, -22, 0.036, CHEEKS_AT),
+        bead(CHEEKS, -44, -34, 0.031, CHEEKS_AT),
+        bead(CHEEKS, -70, -30, 0.031, CHEEKS_AT),
+    ]
+
+    material = Droplet
+    # Como las gotas se mueven, la esfera que las contiene va a mano:
+    # toda la cabeza.
+    bounds = 0.72
+
+
 class Head(claymarch.Model):
     """La cabeza: la forma, con los ojos metidos en sus cavidades."""
 
     skull = Skull
     eyes = Eye
+    lids = Lids
+    drops = HeadDrops
+    drip = Drip
 
     material = blue
     position = (0, 0.60, 0)
@@ -271,18 +585,22 @@ class BackGrooves(claymarch.Drawing):
     symmetry = "x"
 
 
+# Las medidas del lomo y dónde va. Casi del tamaño del anillo, que queda
+# medio hundido en él. Los dos primeros números son el ancho y el alto;
+# el tercero, cuánto sobresale hacia atrás. Las usan el lomo y sus gotas.
+BACK = (0.50, 0.52, 0.38)
+BACK_AT = (0, 0, -0.14)
+
+
 class Back(claymarch.Model):
     """El lomo marrón, con las placas marcadas por ranuras."""
 
-    # Casi del tamaño del anillo, que queda medio hundido en él. Los dos
-    # primeros números son el ancho y el alto; el tercero, cuánto
-    # sobresale hacia atrás.
-    dome = claymarch.Ellipsoid(0.50, 0.52, 0.38)
+    dome = claymarch.Ellipsoid(*BACK)
     # Las ranuras, talladas desde el punto del lomo que más sobresale.
-    grooves = BackGrooves(engrave=(0, 0, -0.38))
+    grooves = BackGrooves(engrave=(0, 0, -BACK[2]))
 
     material = brown
-    position = (0, 0, -0.14)
+    position = BACK_AT
 
 
 # El dibujo de la panza, de un costado: cada renglón es una ranura, de un
@@ -317,15 +635,21 @@ class PlastronGrooves(claymarch.Drawing):
     symmetry = "x"
 
 
+# Las medidas de la panza y dónde va: ancho, alto y cuánto sobresale
+# hacia adelante. Las usan la panza y sus gotas.
+BELLY = (0.48, 0.51, 0.30)
+BELLY_AT = (0, 0, 0.08)
+
+
 class Plastron(claymarch.Model):
     """La panza crema, con las placas marcadas por ranuras."""
 
-    belly = claymarch.Ellipsoid(0.48, 0.51, 0.30)
+    belly = claymarch.Ellipsoid(*BELLY)
     # Las ranuras, talladas desde el punto de la panza que más sobresale.
-    grooves = PlastronGrooves(engrave=(0, 0, 0.30))
+    grooves = PlastronGrooves(engrave=(0, 0, BELLY[2]))
 
     material = cream
-    position = (0, 0, 0.08)
+    position = BELLY_AT
 
 
 # Dónde sale cada brazo del caparazón: hacia el costado, hacia arriba y
@@ -337,7 +661,8 @@ LEG_AT = (0.33, -0.30, 0.18)
 
 class Arm(claymarch.Model):
     """Un brazo: corto y gordito, con dos dedos y un pulgar. Modelado con
-    el hombro en el origen, saliendo hacia el costado (x).
+    el hombro en el origen, saliendo hacia el costado (x). Como gira
+    alrededor del origen, se mueve desde el hombro.
 
     Cada pieza es una cápsula: va de un punto a otro, con un grosor al
     empezar y otro al terminar.
@@ -376,6 +701,11 @@ class Arm(claymarch.Model):
     smooth = 0.03
     material = blue
 
+    def rotation(self, t):
+        # Aletea: sube y baja el brazo. El primer número es cuánto; el
+        # otro, la velocidad. El otro brazo es su espejo y hace lo mismo.
+        return (0, 0, 9 * claymarch.sin(t * 4.0))
+
 
 class Leg(claymarch.Model):
     """Una pierna: corta y gruesa, con un pie de tres dedos en punta.
@@ -396,7 +726,7 @@ class Leg(claymarch.Model):
     thigh = claymarch.Curve(
         (-0.05, 0.03, -0.05), (0.06, -0.13, 0.10), (0.0, -0.32, 0.04),
         0.17, 0.13,
-        rotation = (10, 0, 0)
+        rotation=(10, 0, 0),
     )
     # El pie: del tobillo hacia adelante, apoyado en el piso.
     foot = claymarch.Capsule(
@@ -485,6 +815,11 @@ def groove_points():
     ]
 
 
+# Cuánto se va la cola hacia un costado, en grados: 0 sale derecho hacia
+# atrás; positivo va para un lado y negativo para el otro.
+TAIL_SWING = 50
+
+
 class Tail(claymarch.Model):
     """La cola: sale de la panza por un cuello fino que pasa por debajo
     del borde del caparazón, engorda y termina en una bola. Lo que parece
@@ -507,26 +842,41 @@ class Tail(claymarch.Model):
     )
 
     material = blue
+    position = TAIL_AT
+    # La cola gira alrededor del punto de donde sale el cuello, adentro
+    # de la panza: así no se despega del caparazón.
+    pivot = NECK[0]
+
+    def rotation(self, t):
+        # Menea la cola alrededor de TAIL_SWING. El primer número es
+        # cuánto se va hacia cada lado; el otro, la velocidad.
+        return (0, TAIL_SWING + 7 * claymarch.sin(t * 3.0), 0)
 
 
-# Cuánto se va la cola hacia un costado, en grados: 0 sale derecho hacia
-# atrás; positivo va para un lado y negativo para el otro.
-TAIL_SWING = 50
+class ShellDrops(claymarch.Model):
+    """Las gotas del caparazón, renglón por renglón como en la cabeza:
+    180 es el medio del lomo."""
 
+    parts = [
+        # En la panza.
+        bead(BELLY, 14, 34, 0.020, BELLY_AT),
+        bead(BELLY, -24, 6, 0.018, BELLY_AT),
+        bead(BELLY, 28, -22, 0.016, BELLY_AT),
+        bead(BELLY, -8, -38, 0.020, BELLY_AT),
+        bead(BELLY, -30, 24, 0.020, BELLY_AT),
+        bead(BELLY, 6, -6, 0.017, BELLY_AT),
+        # En el lomo.
+        bead(BACK, 170, 42, 0.022, BACK_AT),
+        bead(BACK, 205, 20, 0.018, BACK_AT),
+        bead(BACK, 150, -8, 0.020, BACK_AT),
+        bead(BACK, 188, -30, 0.016, BACK_AT),
+        bead(BACK, 196, 44, 0.022, BACK_AT),
+        bead(BACK, 160, 14, 0.020, BACK_AT),
+        bead(BACK, 215, -14, 0.018, BACK_AT),
+    ]
 
-class SwungTail(claymarch.Model):
-    """La cola, girada hacia un costado desde donde nace.
-
-    El origen de este modelo es el punto de la panza de donde sale el
-    cuello: la cola gira alrededor de ahí, así no se despega del
-    caparazón. La cola va corrida para que su cuello empiece en ese
-    origen.
-    """
-
-    tail = Tail(position=tuple(-c for c in NECK[0]))
-
-    position = tuple(a + b for a, b in zip(TAIL_AT, NECK[0]))
-    rotation = (0, TAIL_SWING, 0)
+    material = Droplet
+    bounds = ((0, 0, -0.05), 0.62)  # todo el caparazón
 
 
 class Shell(claymarch.Model):
@@ -559,6 +909,7 @@ class Shell(claymarch.Model):
     # El borde: un anillo blanco que rodea el caparazón, con las ondas de
     # RIM_WAVE.
     rim = RimSide
+    drops = ShellDrops
 
 
 class Body(claymarch.Model):
@@ -568,7 +919,7 @@ class Body(claymarch.Model):
     shell = Shell
     arms = Arm(position=ARM_AT, symmetry="x")
     legs = Leg(position=LEG_AT, symmetry="x")
-    tail = SwungTail
+    tail = Tail
 
 
 # Hacia dónde y qué tan rápido corre el agua del chorro: hacia adelante
@@ -620,36 +971,88 @@ class Foam(claymarch.Material):
     specular = 0.6
 
 
-# Dónde cae el chorro, medido desde la boca: el piso está 1.74 más abajo.
-JET_LANDS = (0, -1.74, 2.40)
-DROPS = 7  # cuántas gotas saltan de la salpicadura
+JET_REACH = 2.40  # qué tan lejos de la boca cae el chorro, hacia adelante
+
+# Las gotas que saltan de la salpicadura. Cada renglón es una:
+# - hacia dónde sale, en grados (0 es hacia adelante, para donde empuja
+#   el chorro; 90 un costado; 180 hacia atrás, hacia Squirtle)
+# - qué tan lejos llega y qué tan alto salta
+# - el tamaño
+# - cuántas veces salta por ciclo (un número entero, para que la
+#   animación empalme) y cuánto se atrasa respecto de las demás (de 0 a 1)
+# Hay más hacia adelante que hacia atrás. Se pueden mover, agregar o
+# sacar renglones.
+SPATTER = [
+    (10, 0.70, 0.55, 0.070, 14, 0.00),
+    (-35, 0.55, 0.80, 0.055, 17, 0.37),
+    (50, 0.60, 0.45, 0.060, 12, 0.71),
+    (-75, 0.45, 0.70, 0.045, 19, 0.13),
+    (95, 0.40, 0.90, 0.050, 15, 0.55),
+    (-130, 0.35, 0.55, 0.040, 13, 0.86),
+    (160, 0.30, 0.75, 0.045, 18, 0.24),
+    (-12, 0.90, 0.35, 0.040, 16, 0.62),
+    (28, 0.50, 1.00, 0.035, 11, 0.45),
+]
 
 
-def drop(i):
-    """Una gota de la salpicadura: salta desde donde cae el chorro, hace
-    un arco hacia afuera y vuelve a empezar. Cada una sale para un lado
-    distinto y a destiempo de las demás."""
-    turn = math.radians(360 * i / DROPS + 20)
-    far = 0.45 + 0.20 * (i % 3)  # qué tan lejos llega
-    high = 0.50 + 0.25 * ((i * 2) % 3)  # qué tan alto salta
+class Spray(Droplet):
+    """El agua de las gotas que saltan: limpia como la de las gotas del
+    cuerpo, un poco menos transparente para que se vea contra el mar."""
 
-    def along(t):
+    opacity = 0.40
+
+
+class Spatter(claymarch.Model):
+    """Una gota de la salpicadura: nace chiquita en la espuma, salta
+    haciendo un arco hacia afuera, y vuelve a empezar. En el aire se
+    estira hacia donde va: más cuando va rápido (al salir y al caer) y
+    casi nada en lo más alto, donde frena."""
+
+    lands = (0, 0, 0)  # dónde cae el chorro: de ahí sale
+    heading = 0
+    far = 0.5
+    high = 0.5
+    big = 0.05
+    jumps = 16
+    late = 0.0
+
+    def along(self, t):
         # De 0 a 1 una y otra vez: en qué parte del salto está.
-        return claymarch.fract(t * 1.3 + i * 0.37)
+        return claymarch.fract(t * self.jumps / LOOP + self.late)
 
-    def position(t):
-        k = along(t)
+    def point(self, k):
+        """Dónde está la gota en esa parte del salto."""
+        turn = math.radians(self.heading)
         return (
-            JET_LANDS[0] + math.sin(turn) * far * k,
-            JET_LANDS[1] + 4 * high * k * (1 - k),
-            JET_LANDS[2] + math.cos(turn) * far * k,
+            self.lands[0] + math.sin(turn) * self.far * k,
+            self.lands[1] + 4 * self.high * k * (1 - k),
+            self.lands[2] + math.cos(turn) * self.far * k,
         )
 
-    def size(t):
-        # Se achica mientras vuela.
-        return 1 - 0.6 * along(t)
+    def scale(self, t):
+        # Crece al salir de la espuma y se achica mientras vuela.
+        k = self.along(t)
+        born = claymarch.smoothstep(0.0, 0.15, k)
+        return born * (1 - 0.6 * k)
 
-    return claymarch.Sphere(0.07, size=size, position=position)
+    def front(self, t):
+        return self.point(self.along(t))
+
+    def back(self, t):
+        # La parte de atrás va por el mismo camino, un instante después:
+        # cuanto más rápido va la gota, más lejos queda.
+        return self.point(claymarch.maximum(self.along(t) - 0.035, 0.0))
+
+    def parts(self):
+        return [
+            claymarch.Sphere(self.big, size=self.scale, position=self.front),
+            claymarch.Sphere(
+                0.6 * self.big, size=self.scale, position=self.back
+            ),
+        ]
+
+    smooth = 0.04  # funde las dos partes en una sola gota
+    material = Spray
 
 
 class WaterJet(claymarch.Model):
@@ -657,7 +1060,13 @@ class WaterJet(claymarch.Model):
     cae hasta el piso, donde salpica. Modelado con la boca en el origen.
     """
 
+    # A qué altura cae el agua: 0 es el piso donde está parado Squirtle.
+    # Si está sobre algo (una roca en el mar), acá va la altura del agua.
+    floor = 0.0
+
     def parts(self):
+        # Dónde cae, medido desde la boca.
+        lands = (0, self.floor - mouth_point()[1], JET_REACH)
         # El chorro es una Curve: va del primer punto (adentro de la
         # boca) al tercero (donde cae) doblándose hacia el del medio, que
         # marca qué tan alto y qué tan lejos llega antes de caer. Los dos
@@ -666,25 +1075,35 @@ class WaterJet(claymarch.Model):
         # cuánto sube y baja, de qué tamaño son las ondas y hacia dónde
         # van.
         stream = claymarch.Curve(
-            (0, 0, -0.06), (0, 0.35, 1.10), JET_LANDS,
+            (0, 0, -0.06), (0, 0.35, 1.10), lands,
             0.06, 0.13,
             ripple=(0.07, 0.16, JET_FLOW),
         )
         # La espuma donde cae: un montículo chato que se mueve.
         splash = claymarch.Ellipsoid(
             0.32, 0.10, 0.32,
-            position=JET_LANDS,
+            position=lands,
             ripple=(0.08, 0.12, (0, 1.2, 0)),
             material=Foam,
         )
-        return [stream, splash, *[drop(i) for i in range(DROPS)]]
+        drops = [
+            Spatter(
+                lands=lands, heading=heading, far=far, high=high,
+                big=big, jumps=jumps, late=late,
+            )
+            for heading, far, high, big, jumps, late in SPATTER
+        ]
+        return [stream, splash, *drops]
 
     material = Water
+    # Una esfera que contiene el chorro, la espuma y las gotas: lejos de
+    # ella no hace falta calcularlos. Como las gotas se mueven, no se
+    # puede calcular sola: es (centro, radio), medido desde la boca.
+    bounds = ((0, -0.85, 1.5), 2.2)
 
     def rotation(self, t):
-        # Se mueve de un lado a otro, como jugando. El primer número es
-        # cuánto se abre hacia los costados; el otro, la velocidad.
-        return (0, 10 * claymarch.sin(t * 2.0), 0)
+        # Gira con la cabeza.
+        return (0, sway(t), 0)
 
 
 # Dónde va la cabeza: apoya directo sobre el caparazón, sin cuello.
@@ -694,8 +1113,8 @@ HEAD_TILT = 1
 
 
 def mouth_point():
-    """Dónde queda la boca con la cabeza ya ubicada e inclinada: de ahí
-    sale el chorro."""
+    """Dónde queda la boca con la cabeza ya ubicada e inclinada, mirando
+    al frente."""
     turn = math.radians(HEAD_TILT)
     x, y, z = MOUTH_AT
     # Al mirar hacia arriba, la boca sube y se va un poco hacia atrás.
@@ -704,12 +1123,37 @@ def mouth_point():
     return tuple(a + b for a, b in zip(HEAD_AT, (x, up, forward)))
 
 
+def head_turn(t):
+    """El giro de la cabeza: inclinada hacia arriba y moviéndose de un
+    lado a otro."""
+    return (-HEAD_TILT, sway(t), 0)
+
+
+def jet_start(t):
+    """Dónde sale el chorro en cada momento: la boca se mueve cuando la
+    cabeza gira, y el chorro la sigue."""
+    x, up, forward = (a - b for a, b in zip(mouth_point(), HEAD_AT))
+    turn = claymarch.radians(sway(t))
+    return (
+        HEAD_AT[0] - claymarch.sin(turn) * forward,
+        HEAD_AT[1] + up,
+        HEAD_AT[2] + claymarch.cos(turn) * forward,
+    )
+
+
+def body_turn(t):
+    """El cuerpo acompaña a la cabeza: gira un poco hacia el mismo lado y
+    se ladea apenas, como pasando el peso de una pierna a la otra. Los
+    dos números son qué parte del giro de la cabeza hace el cuerpo."""
+    return (0, 0.35 * sway(t), 0.15 * sway(t))
+
+
 class Squirtle(claymarch.Model):
     # size agranda el cuerpo entero respecto de la cabeza.
-    body = Body(size=1.4, position=(0, 1.02, 0))
-    head = Head(position=HEAD_AT, rotation=(-HEAD_TILT, 0, 0))
+    body = Body(size=1.4, position=(0, 1.02, 0), rotation=body_turn)
+    head = Head(position=HEAD_AT, rotation=head_turn)
     # El chorro sale de la boca.
-    jet = WaterJet(position=mouth_point())
+    jet = WaterJet(position=jet_start)
 
 
 class SquirtleScene(claymarch.Scene):
