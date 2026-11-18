@@ -40,10 +40,10 @@ ROCKS = [
 # Dónde está el faro y qué tan grande es.
 LIGHTHOUSE_AT = (-7.0, -18.0)
 LIGHTHOUSE_SIZE = 1.3
-# Dónde queda la linterna del faro: 6.5 por encima de su base.
+# Dónde queda la luz del faro: 6.57 por encima de su base.
 LAMP_AT = (
     LIGHTHOUSE_AT[0],
-    SEA_LEVEL + 6.5 * LIGHTHOUSE_SIZE,
+    SEA_LEVEL + 6.57 * LIGHTHOUSE_SIZE,
     LIGHTHOUSE_AT[1],
 )
 # De dónde viene la luz del sol: (costado, altura, frente).
@@ -425,33 +425,293 @@ def lamp_flare(t=claymarch.T):
     return 0.18 + 0.75 * toward ** 6
 
 
+def around(count, radius):
+    """count puntos (x, z) repartidos en una vuelta, a esa distancia del
+    centro."""
+    turns = [math.radians(360 * i / count) for i in range(count)]
+    return [(radius * math.sin(a), radius * math.cos(a)) for a in turns]
+
+
+def bars(count, radius, low, high, thick):
+    """Barrotes verticales repartidos en una vuelta, de low a high."""
+    return claymarch.union(*[
+        claymarch.Capsule((x, low, z), (x, high, z), thick)
+        for x, z in around(count, radius)
+    ])
+
+
+class Gallery(claymarch.Model):
+    """El balcón que rodea la linterna: un piso sostenido por una
+    ménsula, con baranda. Modelado con el piso en el origen."""
+
+    WIDE = 0.95
+    RAIL = 0.34  # el alto de la baranda
+
+    bracket = claymarch.CutCone(0.60, 0.90, 0.28, position=(0, -0.19, 0))
+    deck = claymarch.Cylinder(WIDE, 0.10, position=(0, -0.05, 0))
+    handrail = claymarch.Torus(WIDE - 0.05, 0.022, position=(0, RAIL, 0))
+    midrail = claymarch.Torus(WIDE - 0.05, 0.012, position=(0, RAIL / 2, 0))
+    posts = bars(12, WIDE - 0.05, 0, RAIL, 0.016)
+
+    material = Iron
+
+
+class Cupola(claymarch.Model):
+    """El techo de la linterna: media esfera achatada."""
+
+    whole = claymarch.Ellipsoid(0.54, 0.42, 0.54)
+    upper = claymarch.Box(2, 1, 2, position=(0, 0.5, 0), clip=True)
+
+    material = RoofTiles
+
+
+class Lantern(claymarch.Model):
+    """El cuarto de vidrio de arriba, con luz propia: sobre un zócalo,
+    entre parantes y bajo una cúpula. Modelada con el piso en el
+    origen."""
+
+    GLASS = 0.45  # el radio del vidrio: el mismo que usa Lamp
+
+    plinth = claymarch.Cylinder(0.50, 0.24, position=(0, 0.12, 0))
+    glass = claymarch.Cylinder(
+        GLASS, 0.66, position=(0, 0.57, 0), material=Lamp
+    )
+    frames = bars(8, GLASS + 0.01, 0.24, 0.90, 0.022)
+    eave = claymarch.Cylinder(0.57, 0.05, position=(0, 0.92, 0))
+    cupola = Cupola(position=(0, 0.94, 0))
+    ball = claymarch.Sphere(0.07, position=(0, 1.36, 0))
+    spike = claymarch.Capsule((0, 1.36, 0), (0, 1.72, 0), 0.022, 0.006)
+
+    material = Iron
+
+
+class DarkGlass(claymarch.Material):
+    """El vidrio de las ventanas, visto de afuera: oscuro, con reflejo."""
+
+    color = (0.05, 0.07, 0.10)
+    specular = 0.8
+    reflection = 0.4
+
+
+class Planks(claymarch.Material):
+    """La madera de la puerta: tablas verticales, oscuras."""
+
+    specular = 0.1
+
+    def color(self, p):
+        plank = claymarch.stripes(p.x, 0.07)
+        return claymarch.mix((0.20, 0.12, 0.07), (0.27, 0.17, 0.10), plank)
+
+
+class Arch(claymarch.Model):
+    """Una forma de puerta o de ventana: un rectángulo con medio círculo
+    arriba. De frente, con el centro del rectángulo en el origen."""
+
+    wide = 0.2
+    tall = 0.3
+    deep = 0.5
+
+    def parts(self):
+        return [
+            claymarch.Box(self.wide, self.tall, self.deep),
+            claymarch.Cylinder(
+                self.wide / 2, self.deep,
+                rotation=(90, 0, 0),
+                position=(0, self.tall / 2, 0),
+            ),
+        ]
+
+
+class Masonry(claymarch.Material):
+    """La piedra labrada de la escalera: gris, despareja."""
+
+    specular = 0.1
+
+    def color(self, p):
+        tone = claymarch.noise(p * 6.0)
+        return claymarch.mix((0.42, 0.40, 0.38), (0.62, 0.59, 0.54), tone)
+
+    def bump(self, p):
+        return 0.004 * claymarch.fbm(p * 14.0)
+
+
+class Entrance(claymarch.Model):
+    """Por dónde se llega a la puerta: un rellano y una escalera que baja
+    hasta la piedra. De frente, con el umbral de la puerta en el
+    origen."""
+
+    STEPS = 3
+    RISE = 0.13  # cuánto baja cada escalón
+    RUN = 0.20  # cuánto avanza
+
+    def parts(self):
+        landing = claymarch.Box(
+            0.70, 0.90, 0.50, position=(0, -0.45, 0.25), material=Masonry
+        )
+        # Cada escalón es un bloque que llega hasta abajo.
+        steps = [
+            claymarch.Box(
+                0.56, 1.0, self.RUN,
+                position=(
+                    0,
+                    -0.5 - self.RISE * (i + 1),
+                    0.50 + self.RUN * (i + 0.5),
+                ),
+                material=Masonry,
+            )
+            for i in range(self.STEPS)
+        ]
+        return [landing, *steps]
+
+
+class Shaft(claymarch.Model):
+    """La torre del faro, con la puerta, las ventanas y la escalera que
+    llega a la puerta. Modelada con la base en el origen."""
+
+    BOTTOM = 0.9  # el radio abajo
+    NECK = 0.6  # el radio arriba
+    TOP = 6.0  # el alto
+    SUNK = 0.10  # cuánto se hunden la puerta y los vidrios en la pared
+    # Cada renglón es una abertura: a qué altura está su centro, hacia
+    # dónde mira (0 es adelante), el ancho, el alto y de qué es.
+    OPENINGS = [
+        (1.00, 20, 0.36, 0.70, Planks),  # la puerta: va primera
+        (2.45, 20, 0.16, 0.26, DarkGlass),
+        (3.65, 20, 0.16, 0.26, DarkGlass),
+        (4.85, 20, 0.16, 0.26, DarkGlass),
+    ]
+
+    def on_wall(self, height, heading, sunk=0.0):
+        """Dónde poner algo sobre la pared, y cómo girarlo para que mire
+        hacia afuera."""
+        slope = (self.BOTTOM - self.NECK) / self.TOP
+        radius = self.BOTTOM - slope * height - sunk
+        turn = math.radians(heading)
+        return {
+            "position": (
+                radius * math.sin(turn), height, radius * math.cos(turn)
+            ),
+            "rotation": (0, -heading, 0),
+        }
+
+    def parts(self):
+        wall = claymarch.CutCone(
+            self.BOTTOM, self.NECK, self.TOP,
+            position=(0, self.TOP / 2, 0),
+            material=Tower,
+        )
+        holes = [
+            Arch(
+                wide=wide, tall=tall, carve=0.01,
+                **self.on_wall(height, heading),
+            )
+            for height, heading, wide, tall, fill in self.OPENINGS
+        ]
+        # Lo que tapa cada hueco, un poco hundido: la puerta y los
+        # vidrios.
+        fills = [
+            Arch(
+                wide=wide + 0.04, tall=tall + 0.04, deep=0.04,
+                material=fill,
+                **self.on_wall(height, heading, self.SUNK),
+            )
+            for height, heading, wide, tall, fill in self.OPENINGS
+        ]
+        height, heading, wide, tall, fill = self.OPENINGS[0]
+        entrance = Entrance(**self.on_wall(height - tall / 2, heading))
+        return [wall, *holes, *fills, entrance]
+
+
+class Causeway(claymarch.Model):
+    """La escollera: una lengua ancha de piedra baja que arranca frente
+    a la puerta del faro, dobla y se pierde hacia un costado, fuera de
+    cuadro. Por ahí se llega al faro. Modelada con el islote en el
+    origen y el mar en y = 0."""
+
+    HEADING = -62  # hacia dónde se va: a la izquierda de la cámara
+    WIDE = 2.0
+    SUNK = 0.9  # cuánto queda su centro bajo el mar
+    TOP = 0.40  # la altura del camino, sobre el mar
+    FOAM = 0.6  # qué tan ancha es la franja de espuma a su alrededor
+    # Después de doblar, cada renglón: qué tan lejos sigue y cuánto se
+    # corre hacia un costado.
+    COURSE = [
+        (3.5, 0.6),
+        (7.5, -0.5),
+        (11.5, 0.8),
+        (15.5, 0.1),
+        (19.5, -0.6),
+        (23.5, 0.3),
+        (27.5, 0.0),
+    ]
+
+    @classmethod
+    def points(cls):
+        """Por dónde pasa, como puntos (costado, frente)."""
+        door = math.radians(Shaft.OPENINGS[0][1])
+        turn = math.radians(cls.HEADING)
+        # Sale derecho desde la puerta y recién después dobla.
+        start = [
+            (math.sin(door) * far, math.cos(door) * far)
+            for far in (1.0, 3.0)
+        ]
+        bend_x, bend_z = start[-1]
+        return start + [
+            (
+                bend_x + math.sin(turn) * far + math.cos(turn) * side,
+                bend_z + math.cos(turn) * far - math.sin(turn) * side,
+            )
+            for far, side in cls.COURSE
+        ]
+
+    def parts(self):
+        return [
+            claymarch.Path(
+                [(x, -self.SUNK, z) for x, z in self.points()],
+                self.WIDE,
+                ripple=(0.30, 0.90),
+            ),
+            # Chata arriba, para caminar.
+            claymarch.Box(
+                80, 4, 80, position=(0, self.TOP - 2, 0), clip=0.08
+            ),
+        ]
+
+    material = Stone
+
+    @classmethod
+    def shores(cls):
+        """Dónde rompe la espuma a lo largo de la escollera, ya en la
+        escena: un círculo en cada punto y otro entre cada dos."""
+        points = cls.points()
+        between = [
+            ((a + c) / 2, (b + d) / 2)
+            for (a, b), (c, d) in zip(points, points[1:])
+        ]
+        # El ancho de la escollera a la altura del agua.
+        reach = math.sqrt(cls.WIDE ** 2 - cls.SUNK ** 2)
+        return [
+            (
+                LIGHTHOUSE_AT[0] + LIGHTHOUSE_SIZE * x,
+                LIGHTHOUSE_AT[1] + LIGHTHOUSE_SIZE * z,
+                LIGHTHOUSE_SIZE * reach + cls.FOAM,
+            )
+            for x, z in points + between
+        ]
+
+
+SHORES += Causeway.shores()
+
+
 class Lighthouse(claymarch.Model):
     """El faro, sobre un islote de piedra. Modelado con la base de la
     torre en el origen."""
 
     islet = Islet(position=(0, -0.7, 0))
-    # La torre: un cono sin punta, más ancho abajo. Los números son el
-    # radio de abajo, el de arriba y el alto.
-    tower = claymarch.CutCone(
-        0.9, 0.6, 6.0, position=(0, 3.0, 0), material=Tower
-    )
-    # El balcón que rodea la linterna.
-    gallery = claymarch.Cylinder(
-        0.85, 0.16,
-        position=(0, 6.05, 0),
-        material=Iron,
-    )
-    # La linterna: el cuarto de vidrio de arriba, con luz propia.
-    lantern = claymarch.Cylinder(
-        0.45, 0.8,
-        position=(0, 6.5, 0),
-        material=Lamp,
-    )
-    roof = claymarch.Cone(
-        0.62, 0.6,
-        position=(0, 6.9, 0),
-        material=RoofTiles,
-    )
+    causeway = Causeway
+    shaft = Shaft
+    gallery = Gallery(position=(0, Shaft.TOP, 0))
+    lantern = Lantern(position=(0, Shaft.TOP, 0))
 
 
 # Qué tan mojado está Squirtle: 0 es seco; más alto, el color se oscurece
