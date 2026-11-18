@@ -188,7 +188,7 @@ class Head(claymarch.Model):
 
     material = blue
     position = (0, 1.94, 0.35)
-    TILT = 10  # mira hacia arriba
+    TILT = 6  # mira hacia arriba
     rotation = (-TILT, 0, 0)
 
 
