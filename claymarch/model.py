@@ -68,6 +68,7 @@ class Model(Shape):
     symmetry = None                 # "x", "y" or "z": the model is copied to the other side (see Shape.mirror)
     # what the model does when it is a part of another model (default: it is added)
     carve = None                    # a number or True: it is cut out of the parts before it
+    clip = None                     # a number or True: only what is inside it is left of the parts before it
     join = None                     # a number: it is added, blended with the parts before it
     # speed-up: a sphere that contains the model. None = worked out from the
     # parts when it can be; a radius or (center, radius) = this one; False = none
@@ -166,7 +167,7 @@ class Model(Shape):
 
     @property
     def _role(self):
-        return role_of(self._value("carve"), self._value("join"), type(self).__name__)
+        return role_of(self._value("carve"), self._value("clip"), self._value("join"), type(self).__name__)
 
     def emit(self, ctx, p, mat):
         return self.build().emit(ctx, p, mat)

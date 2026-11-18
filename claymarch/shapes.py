@@ -183,6 +183,7 @@ class Shape:
 
     # what this shape does when it is a part of a Model: None = it is added;
     # ("carve", smooth) = it is cut out of the parts before it;
+    # ("clip", smooth) = only what is inside it is left of the parts before it;
     # ("join", smooth) = it is added, blended with the parts before it
     _role = None
 
@@ -521,8 +522,8 @@ def collect_parts(model):
 def assemble(parts, smooth, who):
     """Put the parts of a Model together, one after another, in order. Each
     part says what it does to what came before it: it is added (blended with
-    the model's smooth), joined with its own blend, carved out, or drawn on
-    the surface."""
+    the model's smooth), joined with its own blend, carved out, used to clip,
+    or drawn on the surface."""
     # A model used as a part wraps itself in a bounding sphere when it can
     # (see Model.build), which is only right if it is simply added. One that
     # melts into its neighbors or cuts them is built without the sphere, and
@@ -552,11 +553,15 @@ def assemble(parts, smooth, who):
         if whole is None:
             if role is not None and role[0] == "carve":
                 raise ValueError(f"{who}: the first part cannot be carved out of anything")
+            if role is not None and role[0] == "clip":
+                raise ValueError(f"{who}: the first part has nothing before it to clip")
             whole = part
         elif role is None:
             whole = whole.union(part, smooth)
         elif role[0] == "carve":
             whole = whole.subtract(part, role[1])
+        elif role[0] == "clip":
+            whole = whole.intersect(part, role[1])
         else:
             whole = whole.union(part, role[1])
     return whole
@@ -665,7 +670,7 @@ def _as_shape(value):
 # They mean the same as in a Model and are applied in this order.
 # (bend and symmetry are the bend_x / bend_z and mirror methods, under names
 # that do not clash with them.)
-_DECLARED = ("material", "ripple", "size", "rotation", "pivot", "position", "bend", "symmetry", "carve", "join")
+_DECLARED = ("material", "ripple", "size", "rotation", "pivot", "position", "bend", "symmetry", "carve", "clip", "join")
 
 
 def _now(value):
@@ -679,15 +684,17 @@ def _zero(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and value == 0
 
 
-def role_of(carve, join, who):
-    """Turn the carve= / join= properties into a role (see Shape._role)."""
-    for name, value in (("carve", carve), ("join", join)):
-        if value is None or value is False:
-            continue
-        if carve not in (None, False) and join not in (None, False):
-            raise TypeError(f"{who}: a part is carved OR joined, not both")
-        return (name, 0.0 if value is True else value)
-    return None
+def role_of(carve, clip, join, who):
+    """Turn the carve= / clip= / join= properties into a role (see Shape._role)."""
+    given = [(name, value) for name, value in (("carve", carve), ("clip", clip), ("join", join))
+             if value is not None and value is not False]
+    if len(given) > 1:
+        raise TypeError(f"{who}: a part has one role (carve, clip or join), not "
+                        + " and ".join(name for name, _ in given))
+    if not given:
+        return None
+    name, value = given[0]
+    return (name, 0.0 if value is True else value)
 
 
 def place(shape, size=1.0, rotation=(0.0, 0.0, 0.0), position=(0.0, 0.0, 0.0),
@@ -733,11 +740,14 @@ class _Declarative(type):
     sees them, and applied to the finished shape."""
     def __call__(cls, *args, **kw):
         declared = {k: _now(kw.pop(k)) for k in list(kw) if k in _DECLARED}
+        if declared.get("symmetry") is not None and cls._meets_its_copy:
+            kw["_symmetry"] = declared["symmetry"]
         shape = super().__call__(*args, **kw)
         if not declared:
             return shape
         material = declared.pop("material", None)
-        role = role_of(declared.pop("carve", None), declared.pop("join", None), cls.__name__)
+        role = role_of(declared.pop("carve", None), declared.pop("clip", None),
+                       declared.pop("join", None), cls.__name__)
         if material is not None:
             shape = shape.paint(material)
         shape = place(shape, **declared)
@@ -747,6 +757,7 @@ class _Declarative(type):
 
 
 class _Primitive(Shape, metaclass=_Declarative):
+    _meets_its_copy = False     # True: the primitive is told its symmetry (see Path)
     def sdf(self, p):
         raise NotImplementedError
 
@@ -853,8 +864,13 @@ class Path(_Primitive):
     every point pulls, and none is touched.
 
     Each bend starts and ends halfway between its point and the neighbors,
-    which is why the bends meet without a corner."""
-    def __init__(self, points, radius=0.1, closed=False, radius2=None):
+    which is why the bends meet without a corner.
+
+    With symmetry=, an end that lies on the mirror plane meets its copy in
+    a curve too: that end is pulled toward instead of touched."""
+    _meets_its_copy = True
+
+    def __init__(self, points, radius=0.1, closed=False, radius2=None, _symmetry=None):
         points = [tuple(float(c) for c in point) for point in points]
         if len(points) < 2 or any(len(point) != 3 for point in points):
             raise ValueError("Path needs two or more points, each one (x, y, z)")
@@ -862,6 +878,8 @@ class Path(_Primitive):
             raise ValueError("a closed Path needs three or more points")
         if closed and radius2 is not None:
             raise ValueError("a closed Path has no end to taper toward: leave radius2 out")
+        if _symmetry in ("x", "y", "z") and not closed:
+            points = _met("xyz".index(_symmetry), points)
         self.r = E(radius)
         self.r2 = None if radius2 is None else E(radius2)
         self.arcs = _arcs(points, closed)
@@ -894,6 +912,27 @@ class Path(_Primitive):
 
 def _halfway(a, b):
     return tuple((p + q) / 2 for p, q in zip(a, b))
+
+
+def _met(axis, points):
+    """The points of a Path that is mirrored across axis, with one more
+    before an end that lies on the mirror plane: halfway to its neighbor,
+    on the other side. The tube then crosses the plane straight, pulled by
+    that end, and its copy carries on where it leaves off."""
+    def across(end, neighbor):
+        point = list(_halfway(end, neighbor))
+        point[axis] = -point[axis]
+        return tuple(point)
+
+    def on_plane(point):
+        return abs(point[axis]) < 1e-9
+
+    first, last = points[0], points[-1]
+    if on_plane(first):
+        points = [across(first, points[1]), *points]
+    if on_plane(last):
+        points = [*points, across(last, points[-2])]
+    return points
 
 
 def _arcs(points, closed):

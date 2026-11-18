@@ -93,7 +93,7 @@ All of them are centered at the origin unless noted.
 | `Box(width=1, height=1, depth=1, rounding=0)` | full sizes | `rounding` rounds the edges without growing the box |
 | `Capsule(start=(0,0,0), end=(0,1,0), radius=0.2, radius2=None)` | a thick segment | with `radius2` it tapers towards `end` |
 | `Curve(start=(0,0,0), control=(0,1,0), end=(1,1,0), radius=0.2, radius2=None)` | a thick curved line | a parabola arc from `start` to `end`; `control` is where it bulges towards (the curve does not pass through it). With `radius2` it tapers |
-| `Path(points, radius=0.1, closed=False, radius2=None)` | a tube that follows a list of points | a chain of `Curve`s. With `radius2` it tapers from the first point to the last, the same amount on every bend (not on a closed one); without it the thickness is the same all along. `points` is a list of `(x, y, z)`, two or more. The tube starts at the first point and ends at the last; each point in between is where it is pulled towards, one bend for each (like the `control` of a `Curve`, it does not pass through them). With three points it is exactly a `Curve`. `closed=True` makes a loop (three or more points): every point pulls and none is touched. The points are plain numbers: they cannot change with `t` |
+| `Path(points, radius=0.1, closed=False, radius2=None)` | a tube that follows a list of points | a chain of `Curve`s. With `radius2` it tapers from the first point to the last, the same amount on every bend (not on a closed one); without it the thickness is the same all along. `points` is a list of `(x, y, z)`, two or more. The tube starts at the first point and ends at the last; each point in between is where it is pulled towards, one bend for each (like the `control` of a `Curve`, it does not pass through them). With three points it is exactly a `Curve`. `closed=True` makes a loop (three or more points): every point pulls and none is touched. With `symmetry`, an end that lies on the mirror plane meets its copy in a curve instead of a corner: half a ring, mirrored, is a whole ring. The points are plain numbers: they cannot change with `t` |
 | `Cylinder(radius=0.5, height=1, rounding=0)` | vertical | |
 | `Torus(radius=0.5, thickness=0.15)` | lying flat (vertical axis) | |
 | `Cone(radius=0.3, height=1)` | base at the origin, tip pointing up | the base is rounded |
@@ -123,13 +123,14 @@ it is used: `Lamp(position=(1, 0, 0))`).
 |---|---|---|
 | `material` | `None` | what it is painted with (a `Material`, instance or class) |
 | `ripple` | `None` | an uneven surface that moves: `(height, size)` or `(height, size, flow)`. Lumps about `size` across rise and sink up to `height / 2`; `flow` is how fast they travel, `(x, y, z)` in units per second |
-| `size` | `1.0` | uniform scale. At `0` (or below) the piece is not there: it is not drawn, casts no shadow and, as a `carve`, cuts nothing. A size that changes with `t` can reach zero to make a piece appear and vanish |
+| `size` | `1.0` | uniform scale. At `0` (or below) the piece is not there: it is not drawn, casts no shadow and, as a `carve`, cuts nothing (as a `clip`, it leaves nothing). A size that changes with `t` can reach zero to make a piece appear and vanish |
 | `rotation` | `(0, 0, 0)` | degrees around x, y, z (applied in that order) |
 | `pivot` | `(0, 0, 0)` | the point of the piece that `size` and `rotation` leave where it is: the piece turns and grows around it. It does not move the piece |
 | `position` | `(0, 0, 0)` | where it goes |
 | `bend` | `(0, 0)` | curvature of a vertical piece: degrees per unit of height, `(around x, around z)`. For gentle curves; large values distort the piece |
 | `symmetry` | `None` | `"x"`, `"y"` or `"z"`: whatever is on the positive side of that axis is copied to the negative side. Model one of a pair and get both |
 | `carve` | `None` | the role of the piece inside a model: it is cut out (see [The role of each part](#the-role-of-each-part)) |
+| `clip` | `None` | the role of the piece inside a model: only what is inside it is left |
 | `join` | `None` | the role of the piece inside a model: it is added, blended |
 
 **They are always applied in that order**, no matter how they are written:
@@ -341,15 +342,23 @@ class Mug(claymarch.Model):
 |---|---|
 | nothing | it is added to what came before, with the model's `smooth` |
 | `carve=0.01` | it is cut out of everything before it. The number softens the edge of the cut; `carve=True` leaves it sharp |
+| `clip=0.01` | of everything before it, only what is inside this part is left. The number softens the edge; `clip=True` leaves it sharp |
 | `join=0.03` | it is added, blended with what came before, with that radius instead of the model's `smooth`. `join=0` adds it without blending |
 | `patch=(x, y, z)` | only for `Disc` and `Drawing`: it is drawn on what came before, at that point (see [Drawings on a surface](#drawings-on-a-surface)) |
 | `engrave=(x, y, z)` | only for `Drawing`: it is sunk into what came before, at that point (see [Drawings on a surface](#drawings-on-a-surface)) |
 
 - **Order matters.** In `Mug` the handle comes after the hollow: if it came
   before, the hollow would cut into it too.
-- `carve` and `join` act on **everything** before them in that model, and
-  nothing else. If a cut has to affect a single piece, that piece and its cut
-  go in a model of their own.
+- `carve`, `clip` and `join` act on **everything** before them in that
+  model, and nothing else. If a cut has to affect a single piece, that piece
+  and its cut go in a model of their own.
+- A part with `clip` is never seen itself: it is the mould of what stays.
+
+  ```python
+  class Dome(claymarch.Model):
+      ball = claymarch.Sphere(0.5)
+      upper_half = claymarch.Box(2, 1, 2, position=(0, 0.5, 0), clip=True)
+  ```
 - `join=0` is for a model that has `smooth` but where one part must not
   blend: otherwise the blend would fatten it.
 

@@ -227,3 +227,84 @@ def test_pose_says_what_is_wrong(tmp_path):
         scene_text(NotAClass, tmp_path)
     with pytest.raises(TypeError, match="smooth"):
         scene_text(NotAPlacement, tmp_path)
+
+
+def test_clip_leaves_what_is_inside_the_part(tmp_path):
+    class Declared(claymarch.Scene):
+        class dome(claymarch.Model):
+            ball = claymarch.Sphere(0.5)
+            half = claymarch.Box(2, 1, 2, position=(0, 0.5, 0), clip=0.02)
+
+    class Chained(claymarch.Scene):
+        class dome(claymarch.Model):
+            parts = [
+                claymarch.Sphere(0.5).intersect(
+                    claymarch.Box(2, 1, 2, position=(0, 0.5, 0)), smooth=0.02
+                )
+            ]
+
+    assert scene_text(Declared, tmp_path / "a") == scene_text(
+        Chained, tmp_path / "b"
+    )
+
+
+def test_a_model_can_clip(tmp_path):
+    class Half(claymarch.Model):
+        box = claymarch.Box(2, 1, 2, position=(0, 0.5, 0))
+
+    class Clipped(claymarch.Scene):
+        class dome(claymarch.Model):
+            ball = claymarch.Sphere(0.5)
+            half = Half(clip=True)
+
+    class Whole(claymarch.Scene):
+        class dome(claymarch.Model):
+            ball = claymarch.Sphere(0.5)
+            half = Half()
+
+    assert scene_text(Clipped, tmp_path / "a") != scene_text(
+        Whole, tmp_path / "b"
+    )
+
+
+def test_clip_says_what_is_wrong(tmp_path):
+    with pytest.raises(TypeError, match="one role"):
+        claymarch.Sphere(0.5, clip=True, carve=True)
+
+    class Nothing(claymarch.Scene):
+        class dome(claymarch.Model):
+            half = claymarch.Box(1, 1, 1, clip=True)
+
+    with pytest.raises(ValueError, match="nothing before it to clip"):
+        Nothing().export(tmp_path)
+
+
+HALF_RING = [(0, 1, 0), (1, 0, 0), (0, -1, 0)]
+
+
+def test_a_mirrored_path_meets_its_copy_in_a_curve(tmp_path):
+    class Declared(claymarch.Scene):
+        ring = claymarch.Path(HALF_RING, 0.1, symmetry="x")
+
+    class ByHand(claymarch.Scene):
+        ring = claymarch.Path(
+            [(-0.5, 0.5, 0), *HALF_RING, (-0.5, -0.5, 0)], 0.1
+        ).mirror("x")
+
+    assert scene_text(Declared, tmp_path / "a") == scene_text(
+        ByHand, tmp_path / "b"
+    )
+
+
+def test_a_mirrored_path_away_from_the_plane_is_left_alone(tmp_path):
+    points = [(0.2, 1, 0), (1, 0, 0), (0.2, -1, 0)]
+
+    class Declared(claymarch.Scene):
+        horns = claymarch.Path(points, 0.1, symmetry="x")
+
+    class ByHand(claymarch.Scene):
+        horns = claymarch.Path(points, 0.1).mirror("x")
+
+    assert scene_text(Declared, tmp_path / "a") == scene_text(
+        ByHand, tmp_path / "b"
+    )
