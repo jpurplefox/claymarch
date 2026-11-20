@@ -130,8 +130,10 @@ def noise_at(x, y, z):
 
     def uhash(v):
         v &= 0xFFFFFFFF
-        v ^= v >> 16; v = (v * 0x7feb352d) & 0xFFFFFFFF
-        v ^= v >> 15; v = (v * 0x846ca68b) & 0xFFFFFFFF
+        v ^= v >> 16
+        v = (v * 0x7feb352d) & 0xFFFFFFFF
+        v ^= v >> 15
+        v = (v * 0x846ca68b) & 0xFFFFFFFF
         v ^= v >> 16
         return v
 

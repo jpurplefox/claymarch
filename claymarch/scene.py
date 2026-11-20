@@ -231,7 +231,7 @@ class Scene:
             f"const float HAIR_REACH = {E(max(lengths, default=0.05) * 1.02).code};",
             f"const float HAIR_THICK = {E(1.2 / min(sizes, default=0.01)).code};",
         ]
-        c, l = self.camera or Camera(), self.light or Light()
+        c, sun = self.camera or Camera(), self.light or Light()
         f = self.fill or Light()
         constants = "\n".join([
             f"const vec3  CAM_TA    = {vec3(c.target).code};",
@@ -239,8 +239,8 @@ class Scene:
             f"const float CAM_YAW   = radians({E(c.yaw).code});",
             f"const float CAM_PITCH = radians({E(c.pitch).code});",
             f"const float CAM_FL    = {E(c.lens).code};",
-            f"const vec3  LIGHT_DIR = normalize({vec3(l.direction).code});",
-            f"const vec3  LIGHT_COL = {vec3(l.color).code}*{E(l.intensity).code};",
+            f"const vec3  LIGHT_DIR = normalize({vec3(sun.direction).code});",
+            f"const vec3  LIGHT_COL = {vec3(sun.color).code}*{E(sun.intensity).code};",
             f"const vec3  BG_TOP    = {vec3(self.background[0]).code};",
             f"const vec3  BG_BOTTOM = {vec3(self.background[1]).code};",
             f"const vec3  AMBIENT   = {vec3(self.ambient).code};",
@@ -256,7 +256,7 @@ class Scene:
         return (base + "\n" + _RENDER
                 .replace("//@CONSTANTS", constants)
                 .replace("//@CLOUDS", self.clouds.glsl() if self.clouds is not None else "")
-                .replace("//@SUN", l.glsl())
+                .replace("//@SUN", sun.glsl())
                 .replace("//@HALOS", "\n".join(h.glsl() for h in self.halos))
                 .replace("//@MATERIAL_BODY", material_body)
                 .replace("//@BUMPS", bumps)

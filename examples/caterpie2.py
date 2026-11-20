@@ -77,7 +77,6 @@ class Head(claymarch.Model):
     antenna = Antenna()
 
     position = (0, 1.3, 0)
-    rotation = (0, -15, 0)
     material = green
 
     def rotation(self, t):
@@ -157,7 +156,6 @@ class Tail(claymarch.Model):
     )
     material = cream
     position = (0, 0.05, -1.66)
-    rotation = (-35, 0, 0)
 
     def rotation(self, t):
         return (-35, 0, 14 * claymarch.sin(t * 5))
