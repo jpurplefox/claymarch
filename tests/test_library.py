@@ -423,8 +423,8 @@ def test_denser_fuzz_stops_more_light(tmp_path):
     class Dense(claymarch.Scene):
         ball = claymarch.Sphere(0.5, fuzz=claymarch.Fuzz(density=3))
 
-    assert "3.0*1.0*smoothstep(0.45" not in scene_text(Thin, tmp_path / "a")
-    assert "3.0*1.0*smoothstep(0.45" in scene_text(Dense, tmp_path / "b")
+    assert "3.0*smoothstep(0.45" not in scene_text(Thin, tmp_path / "a")
+    assert "3.0*smoothstep(0.45" in scene_text(Dense, tmp_path / "b")
 
 
 def test_fuzz_makes_room_in_the_bounding_sphere():
@@ -474,6 +474,18 @@ def test_fuzz_is_written_like_hair(tmp_path):
     assert "smoothstep(0.2, 0.4, " in code
     with pytest.raises(TypeError, match="lean"):
         claymarch.Fuzz(lean=(0, 0, -0.03))
+
+
+def test_fuzz_grows_shorter_where_it_thins_out(tmp_path):
+    def patches(out, point):
+        return claymarch.smoothstep(0.4, 0.6, claymarch.noise(point))
+
+    class Lawn(claymarch.Scene):
+        ball = claymarch.Sphere(0.5, fuzz=claymarch.Fuzz(grows=patches))
+
+    code = scene_text(Lawn, tmp_path).split("float map(")[1]
+    # how tall the strands are is scaled by how much grows there
+    assert "(0.3+0.7*s" in code and ")*g" in code
 
 
 def test_a_shape_can_have_several_fuzzes(tmp_path):

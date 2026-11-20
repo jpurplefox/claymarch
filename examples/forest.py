@@ -8,7 +8,7 @@ acá. Ejes: y es arriba, z es el frente (hacia donde mira), x es el costado.
 import math
 
 import claymarch
-from caterpie import Caterpie, ConeSection, Head, Tail, pulse
+from caterpie import Caterpie, Head
 
 
 # ------------------------------------------------------------------- el cielo
@@ -103,8 +103,10 @@ def on_ground(x, z, sink=0.06):
     return (x, ground_at(x, z, sink), z)
 
 
-class Moss(claymarch.Material):
-    """Piso de musgo.
+class Meadow(claymarch.Material):
+    """El piso: tierra, y encima el pasto (Grass), que toma este mismo
+    material. Cada punto sabe a qué altura está sobre la tierra: al ras es
+    marrón, y el pasto se va poniendo verde hacia arriba.
 
     color es un método de la posición p: noise(p) da manchas suaves entre 0
     y 1, y mix elige entre dos verdes según esa mancha.
@@ -115,11 +117,13 @@ class Moss(claymarch.Material):
     def color(self, p):
         patches = claymarch.noise(p * 1.3)  # manchas grandes
         speckle = claymarch.noise(p * 9.0)  # moteado fino
-        moss = claymarch.mix(
+        green = claymarch.mix(
             (0.20, 0.42, 0.16), (0.44, 0.62, 0.22),
             patches * 0.75 + speckle * 0.25,
         )
-        return lit(moss, p)
+        soil = claymarch.mix((0.20, 0.13, 0.08), (0.34, 0.24, 0.14), speckle)
+        above = p.y - terrain(p)
+        return lit(claymarch.mix(soil, green, claymarch.smoothstep(0.0, 0.07, above)), p)
 
     def glow(self, p, t):
         # Cerca de un hongo el piso brilla apenas, y late con él.
@@ -130,32 +134,98 @@ class Moss(claymarch.Material):
         return 0.004 * claymarch.fbm(p * 14)
 
 
+class Grass(claymarch.Fuzz):
+    """El pasto: hebras largas y casi paradas, que se mecen con la brisa.
+    Sin material propio: toman el del piso (Meadow)."""
+
+    length = 0.09
+    spacing = 0.006
+    lift = 82
+    density = 1.5
+    wind = (0.15, 0.0, 0.10)
+
+    def grows(self, out, point):
+        # A manchones: el noise grande dice dónde hay pasto, el chico le
+        # desordena el borde. Donde no crece queda la tierra.
+        flat = claymarch.vec(point.x, 0, point.z)
+        patches = claymarch.noise(flat * 0.6)
+        tufts = claymarch.noise(flat * 3.0)
+        return claymarch.smoothstep(0.40, 0.65, patches * 0.7 + tufts * 0.3)
+
+
+# ------------------------------------------------------------- el musgo alto
+class MossFuzz(claymarch.Fuzz):
+    """Musgo de verdad: hebras cortas, casi paradas y apretadas. No tienen
+    material propio, así que toman el color de lo que cubren."""
+
+    length = 0.035
+    spacing = 0.006
+    lift = 75
+    density = 1.5
+
+
 # -------------------------------------------------------------------- la rama
+def bark_moss(p):
+    """Dónde hay musgo en la rama: donde mira hacia arriba (p.y alto). El
+    noise le desordena el borde para que no sea una línea recta."""
+    edge = p.y + 0.35 * (claymarch.noise(p * 2.5) - 0.5)
+    moss = claymarch.smoothstep(0.70, 0.86, edge)
+    # ...pero no en la ramita, que está más alta.
+    return moss * claymarch.smoothstep(1.15, 0.95, p.y)
+
+
+STUB_BASE = (0.30, 0.50, 1.70)  # donde el gajo cortado sale de la rama
+
+
+class BarkMoss(MossFuzz):
+    def grows(self, out, point):
+        # ni alrededor del gajo: ahí el musgo de la rama quedaría como un
+        # aro alrededor de su base
+        stub = claymarch.length(point - STUB_BASE)
+        return bark_moss(point) * claymarch.smoothstep(0.35, 0.55, stub)
+
+
+def cracks(p):
+    """Las grietas de la corteza: 0 en el fondo de una grieta, 1 lejos.
+
+    Donde el noise cruza el 0.5 queda una línea; estirado a lo largo de la
+    rama (z cambia poco), esas líneas son grietas largas que se cruzan.
+    """
+    # un noise grande las tuerce un poco, para que no sean paralelas
+    wander = 0.4 * claymarch.noise(p * (3.0, 3.0, 0.4))
+    lines = abs(claymarch.noise(p * (26.0, 26.0, 0.9) + wander) * 2 - 1)
+    return claymarch.smoothstep(0.0, 0.35, lines)
+
+
 class Bark(claymarch.Material):
     """Corteza con musgo arriba.
 
     El ruido se estira a lo largo de la rama (z) multiplicando menos esa
-    coordenada: así salen vetas en vez de manchas.
+    coordenada: así salen vetas y grietas en vez de manchas.
     """
 
     specular = 0.04
 
     def color(self, p):
         grain = claymarch.fbm(p * (10.0, 10.0, 1.4))
-        wood = claymarch.mix((0.24, 0.15, 0.09), (0.55, 0.39, 0.22), grain)
-        # Musgo: aparece donde la rama mira hacia arriba (p.y alto). El noise
-        # le desordena el borde para que no sea una línea recta.
-        edge = p.y + 0.35 * (claymarch.noise(p * 2.5) - 0.5)
-        moss = claymarch.smoothstep(0.70, 0.86, edge)
-        # ...pero no en la ramita, que está más alta.
-        moss = moss * claymarch.smoothstep(1.15, 0.95, p.y)
+        wood = claymarch.mix((0.28, 0.18, 0.11), (0.56, 0.41, 0.25), grain)
+        # el fondo de las grietas, más oscuro
+        wood = claymarch.mix((0.20, 0.13, 0.08), wood, cracks(p))
+        # un moteado fino, para que de cerca no quede liso
+        wood = wood * (0.85 + 0.3 * claymarch.noise(p * 45))
+        moss = bark_moss(p)
         return lit(claymarch.mix(wood, (0.33, 0.50, 0.17), moss * 0.85), p)
 
     def glow(self, p, t):
         return halo(p) * (0.40 + 0.08 * claymarch.sin(t * 1.8))
 
     def bump(self, p):
-        return 0.014 * claymarch.fbm(p * (20.0, 20.0, 2.5))
+        # las grietas se hunden; encima, la veta y el moteado
+        return (
+            0.02 * cracks(p)
+            + 0.008 * claymarch.fbm(p * (20.0, 20.0, 2.5))
+            + 0.002 * claymarch.noise(p * 45)
+        )
 
 
 class LeafGreen(claymarch.Material):
@@ -248,7 +318,8 @@ class Branch(claymarch.Model):
     """
 
     trunk = claymarch.Curve(
-        (0.5, 0.35, 2.6), (0.0, 0.62, 0.0), (-0.6, 0.45, -4.2), 0.42, 0.34
+        (0.5, 0.35, 2.6), (0.0, 0.62, 0.0), (-0.6, 0.45, -4.2), 0.42, 0.34,
+        fuzz=BarkMoss(),
     )
     # Nudos: bultos sobre los costados, para que no sea un caño parejo.
     knot_1 = claymarch.Ellipsoid(0.17, 0.15, 0.22, position=(0.36, 0.60, 0.95))
@@ -256,9 +327,7 @@ class Branch(claymarch.Model):
         0.14, 0.13, 0.18, position=(-0.42, 0.50, -1.20)
     )
     # Un gajo cortado, corto y grueso.
-    stub = claymarch.Capsule(
-        (0.30, 0.50, 1.70), (0.88, 0.64, 1.95), 0.15, 0.13
-    )
+    stub = claymarch.Capsule(STUB_BASE, (0.88, 0.64, 1.95), 0.15, 0.13)
     # Una ramita viva: sale cerca del extremo de atrás, sube y se afina.
     twig = claymarch.Curve(
         (-0.30, 0.55, -2.60), (-0.35, 1.55, -2.85), TWIG_TIP, 0.12, 0.04
@@ -475,6 +544,17 @@ class Fern(claymarch.Model):
     bounds = ((0, 0.45, 0), 1.35)  # una esfera que contiene la mata
 
 
+def stone_moss(p):
+    """Dónde hay musgo en una piedra: arriba (donde p.y es alto)."""
+    edge = p.y + 0.25 * (claymarch.noise(p * 5) - 0.5)
+    return claymarch.smoothstep(0.05, 0.30, edge)
+
+
+class StoneMoss(MossFuzz):
+    def grows(self, out, point):
+        return stone_moss(point)
+
+
 class Stone(claymarch.Material):
     """Piedra con musgo arriba (donde p.y es alto)."""
 
@@ -484,9 +564,7 @@ class Stone(claymarch.Material):
         rock = claymarch.mix(
             (0.30, 0.29, 0.25), (0.52, 0.50, 0.42), claymarch.fbm(p * 4)
         )
-        edge = p.y + 0.25 * (claymarch.noise(p * 5) - 0.5)
-        moss = claymarch.smoothstep(0.05, 0.30, edge)
-        return claymarch.mix(rock, (0.26, 0.44, 0.15), moss * 0.9)
+        return claymarch.mix(rock, (0.26, 0.44, 0.15), stone_moss(p) * 0.9)
 
     def bump(self, p):
         return 0.012 * claymarch.fbm(p * 9)
@@ -500,6 +578,7 @@ class Rock(claymarch.Model):
 
     smooth = 0.18
     material = Stone
+    fuzz = StoneMoss()
     bounds = ((0.12, 0, 0.04), 0.95)
 
 
@@ -541,33 +620,27 @@ class Undergrowth(claymarch.Model):
 
 
 class ForestCaterpie(Caterpie):
-    """El mismo Caterpie, con dos cambios para esta escena.
-
-    La cabeza girada hacia la cámara y el cuerpo acomodado sobre la rama.
-    """
+    """El mismo Caterpie, con la cabeza girada hacia la cámara y el cuerpo
+    acomodado sobre la rama."""
 
     # Negativo gira hacia la cámara inicial; 0 es de frente.
     head = Head(look=-40)
-    # En caterpie.py la parte de atrás se va levantando. Acá las secciones 5
-    # y 6 y la cola se acuestan sobre la rama: mismas piezas, más abajo y
-    # más horizontales (90 es acostada del todo).
-    section5 = ConeSection(
-        size=pulse(0.78, 3),
-        position=(0, -0.05, -1.17),
-        rotation=(86, 0, 0),
-    )
-    section6 = ConeSection(
-        size=pulse(0.57, 4),
-        position=(0, -0.11, -1.53),
-        rotation=(92, 0, 0),
-    )
-    tail = Tail(position=(0, -0.07, -1.68))
 
     # El cuerpo sigue la dirección de la rama: en ese tramo la rama se va
     # torciendo unos 9 grados hacia un costado, y el cuerpo gira lo mismo.
     rotation = (0, -9, 0)
     # El 0.17: más chico lo hunde, más grande lo levanta.
     position = (0.04, BRANCH_TOP + 0.17, 0)
+
+    def setup(self):
+        # En caterpie.py la parte de atrás se va levantando. Acá las
+        # secciones 5 y 6 y la cola se acuestan sobre la rama: más abajo y
+        # más horizontales (90 es acostada del todo).
+        self.section5.position = (0, -0.05, -1.17)
+        self.section5.rotation = (86, 0, 0)
+        self.section6.position = (0, -0.11, -1.53)
+        self.section6.rotation = (92, 0, 0)
+        self.tail.position = (0, -0.07, -1.68)
 
 
 class Forest(claymarch.Scene):
@@ -594,7 +667,9 @@ class Forest(claymarch.Scene):
 
     # top: una altura que las lomas nunca pasan (terrain llega a 0.88). Por
     # encima de eso el piso no calcula las lomas, y dibuja más rápido.
-    ground = claymarch.Ground(height=terrain, material=Moss, top=0.9)
+    ground = claymarch.Ground(
+        height=terrain, material=Meadow, top=0.9, fuzz=Grass()
+    )
     background = (SKY_TOP, SKY_HORIZON)
     camera = claymarch.Camera(
         target=(0, 1.55, -0.6), distance=4.6, yaw=50, pitch=9

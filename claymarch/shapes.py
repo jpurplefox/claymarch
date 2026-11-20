@@ -98,6 +98,7 @@ class Context:
         self.turned = 0          # >0 inside a rotation, bend or mirror (see _Repeat)
         self.swaps = []          # the repaints we are inside of, outermost first (see _Repaint)
         self.hairs = []          # (depth, spacing) of each layer of fuzz (see _Fuzz)
+        self.fuzzes = 0          # how many fuzzy things there are (see _Fuzz)
 
     def repainted(self, m):
         """The material that m is drawn with here: each repaint we are inside
@@ -758,9 +759,10 @@ class _Combed:
     `spacing` apart, rising `lift` degrees off the skin and combed toward
     `flow`. Their properties are given when they are made, or in a subclass.
 
-    grows(out) says how thick they grow, 1 all of them and 0 none, where the
-    skin looks toward out (of length 1). It can also ask for the place on
-    the skin: grows(out, point).
+    grows(out) says how much grows, 1 all of it and 0 none, where the skin
+    looks toward out (of length 1): in between, hairs thin out and fuzz
+    gets shorter. It can also ask for the place on the skin:
+    grows(out, point).
 
     out, point, flow and wind are in the coordinates the fur's piece is
     written in: for a shape, those of the model it is in, however the shape
@@ -1751,12 +1753,17 @@ class _Fuzz(Shape):
         ctx.line(f"if( {m}>-0.5 ) gHairRoot = min(gHairRoot,{d});")
         ctx.line(f"float {r} = gHairy==0 ? {d}-{top} : {d};")
         ctx.line(f"if( gHairy==2 && {d}<{top} ) {{")
-        # which way is out: the slope of the shape, measured around p
+        # which way is out: the slope of the shape, measured around p. In a
+        # thin layer it hardly changes from one step through it to the
+        # next, so it is kept (gFuzzOut) until the ray has moved on a bit
+        fid, ctx.fuzzes = ctx.fuzzes, ctx.fuzzes + 1
+        ctx.line(f"  if( distance({p},gFuzzAt{fid})>{_num(0.5 * self.top)} ) {{")
         taps = []
         for v in ("1,-1,-1", "-1,-1,1", "-1,1,-1", "1,1,1"):
             dv, _, _ = self.child.emit(ctx, f"({p}+vec3({v})*0.003)", mat)
             taps.append(f"vec3({v})*{dv}")
-        ctx.line(f"  vec3 {n} = normalize({'+'.join(taps)});")
+        ctx.line(f"  gFuzzOut{fid} = normalize({'+'.join(taps)}); gFuzzAt{fid} = {p}; }}")
+        ctx.line(f"  vec3 {n} = gFuzzOut{fid};")
         ctx.line(f"  vec3 {skin} = {p}-{n}*{d};")
         for f, layer_top in zip(self.layers, self.tops):
             self._emit_layer(ctx, f, layer_top, d, m, u, n, skin)
@@ -1779,9 +1786,25 @@ class _Fuzz(Shape):
         # coarse one decides, so the hair comes in locks
         ctx.line(f"  float {s} = noise3({root}/({c}*6.0)+3.7);")
         thick = _thickness(f._grows(), self.frame.out(n), self.frame.point(skin))
+        if thick != "1.0":
+            grown = ctx.var("g")
+            ctx.line(f"  float {grown} = {thick};")
+            thick = grown
+        # short steps only among the strands: above the tallest that grows
+        # here, and through bare skin's layer, the walk goes straight on
+        # (see render)
+        if thick == "1.0":
+            ctx.line(f"  if( {d}<{_num(top)} ) gHairStep = min(gHairStep,{_num(top / 6)});")
+        else:
+            ctx.line(f"  if( {d}<{_num(top)} && {thick}>0.0 ) "
+                     f"gHairStep = min(gHairStep,max({_num(top / 6)},{d}-{_num(top)}*{thick}));")
+        # where grows is less than 1 the strands are shorter, down to none
         dense = "" if f.density == 1 else f"{_num(f.density)}*"
-        ctx.line(f"  float {k} = {dense}{thick}*smoothstep(0.45,0.65,noise3({root}/{c}))"
-                 f"*clamp((0.3+0.7*{s}-{h})/0.15,0.0,1.0);")
+        tall = f"(0.3+0.7*{s})"
+        if thick != "1.0":
+            tall = f"{tall}*{thick}"
+        ctx.line(f"  float {k} = {dense}smoothstep(0.45,0.65,noise3({root}/{c}))"
+                 f"*clamp(({tall}-{h})/0.15,0.0,1.0);")
         own = _now(f.material)
         if own is None:
             mid, uvw = m, u
@@ -1920,6 +1943,7 @@ class _Hairs(Shape):
         ctx.line(f"  gHairRoot = min(gHairRoot,{h});")
         ctx.line(f"  if( gHairy==0 ) {{ if( {h}-{_num(top)}<{d} ) {{ {d} = {h}-{_num(top)}; {m} = {mid}.0; }} }}")
         ctx.line(f"  else if( gHairy==2 && {h}<{_num(top)} ) {{")
+        ctx.line(f"    gHairStep = min(gHairStep,{_num(top / 6)});")
         ctx.line(f"    vec3 {n} = {self._out(ctx, p, mat)};")
         ctx.line(f"    vec3 {way} = {self._strand(p, n)};")
         ctx.line(f"    float {hh} = clamp({h}/{_num(top)},0.0,1.0);")

@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 from .expr import E, Expr, P, checker, mix, vec3
-from .shapes import Context, Material, Shape, _const, as_material, collect_shapes, union
+from .shapes import Context, Fuzz, Material, Shape, _const, _Fuzz, _num, _some, as_material, collect_shapes, union
 
 TEMPLATE = Path(__file__).parent / "template"
 
@@ -89,11 +89,50 @@ class Ground:
     top:    speed-up for a ground with hills: a height the hills never go
             above. Higher than that the hills are not computed at all. If
             it is too low, the hilltops show cut flat.
+    fuzz:   a Fuzz, or a list of them, over the whole ground: grass (see
+            Fuzz). grows(out, point) can leave some of it bare.
     """
-    def __init__(self, height=0.0, material=None, top=None):
-        self.height, self.top = height, top
+    def __init__(self, height=0.0, material=None, top=None, fuzz=None):
+        self.height, self.top, self.fuzz = height, top, fuzz
         self.material = as_material(material) if material is not None else Material(
             color=mix((0.80, 0.82, 0.84), (0.70, 0.72, 0.75), checker(P, 0.5)), specular=0.05)
+
+
+class _Floor(Shape):
+    """The ground as a shape, so it can take fuzz (see Ground). reach is how
+    far above the hills that fuzz goes: the hills are worked out that much
+    further up."""
+    reach = 0.0
+
+    def __init__(self, ground, gid):
+        self.ground, self.gid = ground, gid
+
+    def emit(self, ctx, p, mat, names=None):
+        d, h, m = names or (ctx.var("dground"), ctx.var("hground"), ctx.var("mground"))
+        ground, gid = self.ground, self.gid
+        height = ground.height
+        if callable(height) and not isinstance(height, Expr):
+            # hills: p.y minus the height is only roughly a distance, so
+            # the ray advances with shorter steps to avoid skipping slopes
+            hills = f"({p}.y-{E(height(Expr(p, 'vec3'))).code})*0.7"
+            if ground.top is None:
+                ctx.line(f"float {d} = {hills}; float {m} = {gid}.0;")
+            else:
+                # well above the tallest hill the height to `top` is a safe
+                # distance and the hills are skipped. Material -1 marks it
+                # as "not a surface" (see _Bound), so it casts no shadow
+                # Measured along the ray when there is one (gRd): a ray
+                # going up never reaches the ground, and a nearly level
+                # one is not slowed down by passing just above the hills.
+                ctx.line(f"float {h} = {p}.y-({E(ground.top).code}); float {m} = -1.0;")
+                ctx.line(f"float {d} = dot(gRd,gRd)<0.5 ? {h} : gRd.y>=0.0 ? 1e4 : {h}/(-gRd.y);")
+                ctx.line(f"if( {h}<{_num(0.1 + self.reach)} ) {{ {d} = {hills}; {m} = {gid}.0; }}")
+        else:
+            ctx.line(f"float {d} = {p}.y-({E(height).code}); float {m} = {gid}.0;")
+        return d, m, p
+
+    def spheres(self):
+        return None
 
 
 class Clouds:
@@ -186,27 +225,15 @@ class Scene:
         ground = Ground() if self.ground == "auto" else self.ground
         if ground is not None:
             gid = ctx.material_id(ground.material)
-            height = ground.height
-            if callable(height) and not isinstance(height, Expr):
-                # hills: p.y minus the height is only roughly a distance, so
-                # the ray advances with shorter steps to avoid skipping slopes
-                hills = f"(p0.y-{E(height(Expr('p0', 'vec3'))).code})*0.7"
-                if ground.top is None:
-                    ctx.line(f"float dground = {hills}; float mground = {gid}.0;")
-                else:
-                    # well above the tallest hill the height to `top` is a safe
-                    # distance and the hills are skipped. Material -1 marks it
-                    # as "not a surface" (see _Bound), so it casts no shadow
-                    # Measured along the ray when there is one (gRd): a ray
-                    # going up never reaches the ground, and a nearly level
-                    # one is not slowed down by passing just above the hills.
-                    ctx.line(f"float hground = p0.y-({E(ground.top).code}); float mground = -1.0;")
-                    ctx.line("float dground = dot(gRd,gRd)<0.5 ? hground : gRd.y>=0.0 ? 1e4 : hground/(-gRd.y);")
-                    ctx.line(f"if( hground<0.1 ) {{ dground = {hills}; mground = {gid}.0; }}")
+            grass = _some(ground.fuzz, Fuzz, "Fuzz(length=0.1, lift=70)")
+            if grass:
+                floor = _Fuzz(_Floor(ground, gid), grass)
+                floor.child.reach = floor.top
+                dg, mg, _ = floor.emit(ctx, "p0", None)
             else:
-                ctx.line(f"float dground = p0.y-({E(height).code}); float mground = {gid}.0;")
-            ctx.line(f"bool isground = dground<{d};")
-            d, m, u = f"(isground?dground:{d})", f"(isground?mground:{m})", f"(isground?p0:{u})"
+                dg, mg, _ = _Floor(ground, gid).emit(ctx, "p0", None, names=("dground", "hground", "mground"))
+            ctx.line(f"bool isground = {dg}<{d};")
+            d, m, u = f"(isground?{dg}:{d})", f"(isground?{mg}:{m})", f"(isground?p0:{u})"
 
         map_body = "\n".join(ctx.lines)
 
@@ -222,12 +249,11 @@ class Scene:
             f"    if( abs(mat-{i}.0)<0.5 ) return {E(mat.value('bump')).code};"
             for i, mat in enumerate(ctx.materials) if mat.bump is not None)
 
-        # the hair: how short the steps through it are, and how dense it is
+        # the hair: how far out from the skin it reaches, and how dense it is
         lengths = [_const(length) or 0.05 for length, size in ctx.hairs]
         sizes = [_const(size) or 0.01 for length, size in ctx.hairs]
         hair = [
             f"const bool  HAIRY      = {'true' if ctx.hairs else 'false'};",
-            f"const float HAIR_STEP  = {E(min(lengths, default=0.05) / 6).code};",
             f"const float HAIR_REACH = {E(max(lengths, default=0.05) * 1.02).code};",
             f"const float HAIR_THICK = {E(1.2 / min(sizes, default=0.01)).code};",
         ]
@@ -261,6 +287,10 @@ class Scene:
                 .replace("//@MATERIAL_BODY", material_body)
                 .replace("//@BUMPS", bumps)
                 .replace("//@MAP_BODY", map_body)
+                .replace("//@FUZZ_KEPT", "".join(f"vec3 gFuzzOut{i}, gFuzzAt{i};\n"
+                                                 for i in range(ctx.fuzzes)))
+                .replace("//@FUZZ_RESET", "".join(f"            gFuzzAt{i} = vec3(1e9);\n"
+                                                  for i in range(ctx.fuzzes)))
                 .replace("@OUT_D", d).replace("@OUT_M", m).replace("@OUT_U", u))
 
     # ---------------------------------------------------------------- export
@@ -301,19 +331,24 @@ bool gSolid = false;
 // smooth shell around the skin; 1, there is only the skin; 2, the skin, and
 // besides, how much hair there is at the point (gHair), whose it is
 // (gHairMat, gHairUvw) and how far up its strand (gHairUp). gHairRoot is
-// how far the point is from the skin of the nearest furry thing.
+// how far the point is from the skin of the nearest furry thing, and
+// gHairStep how short the steps through the hair there have to be (where
+// nothing grows, as long as the way to the nearest skin).
 // How wide one pixel is, at distance 1 (gPixel) and where the ray is now
 // (gFoot): detail finer than gFoot cannot be drawn, only flicker (see Hair).
 float gPixel = 0.0, gFoot = 0.0;
 int   gHairy = 0;
-float gHair = 0.0, gHairRoot = 1e4, gHairMat = 0.0, gHairUp = 0.0;
+float gHair = 0.0, gHairRoot = 1e4, gHairMat = 0.0, gHairUp = 0.0, gHairStep = 1.0;
+// the way out of the skin of each fuzzy thing, and where it was measured,
+// kept while a ray walks through its hair (see _Fuzz)
+//@FUZZ_KEPT
 vec3  gHairUvw = vec3(0.0);
 
 // Distance function of the whole scene. Besides the distance it returns
 // which material was hit and the coordinates used to draw it.
 float map( in vec3 p0, out float mat, out vec3 uvw )
 {
-    gHair = 0.0; gHairRoot = 1e4;
+    gHair = 0.0; gHairRoot = 1e4; gHairStep = 1e4;
 //@MAP_BODY
     mat = @OUT_M; uvw = @OUT_U;
     return @OUT_D;
@@ -551,13 +586,17 @@ vec3 render( in vec3 ro, in vec3 rd )
             float back = pow( clamp(dot(rd,LIGHT_DIR),0.0,1.0), 4.0 );
             vec3 lit = LIGHT_COL*(wrap*(0.3+0.7*sha) + 0.8*back*sha) + 0.35*AMBIENT;
             gHairy = 2; gRd = rd; seen = false;
+//@FUZZ_RESET
             for( int i=0; i<128; i++ )
             {
                 float h = map( ro+t*rd, mat, uvw );
                 // mat<0 is a safe guess, not a surface (see march)
                 if( h<0.0005*t+0.0002 && mat>-0.5 ) { seen = true; break; }
                 if( gHairRoot>reach ) break;
-                float stp = clamp( h, 0.0015, HAIR_STEP );
+                // steps no finer than a pixel there: detail smaller than that
+                // cannot be drawn, so far away the walk takes longer strides
+                float foot = t*gPixel;
+                float stp = clamp( h, max(0.0015,foot), max(gHairStep,2.0*foot) );
                 if( gHair>0.0 )
                 {
                     vec3 alb; float ks, se, emi, opa, rfl, shn;
@@ -565,6 +604,8 @@ vec3 render( in vec3 ro, in vec3 rd )
                     alb = pow( max(alb,0.0), vec3(2.2) );
                     // darker down at the roots, where less light gets in
                     vec3 strand = alb*lit*(0.3+0.7*gHairUp);
+                    // far away it fades into the haze, as surfaces do
+                    strand = fade( strand, sky, t );
                     float a = 1.0-exp( -gHair*HAIR_THICK*stp );
                     hairCol += hairT*a*strand;
                     hairT *= 1.0-a;

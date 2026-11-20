@@ -224,8 +224,10 @@ head = claymarch.Ellipsoid(0.2, 0.18, 0.2, hair=Windblown(length=0.06))
 | `seed` | `1` | `Hair` only: another number grows another set of hairs |
 
 `grows(out)` is a function: `out` is the way the skin faces (an expression,
-of length 1) and it returns how thick the strands grow there, from `1` (all
-of them) to `0` (none); in between they thin out. It can also ask for the
+of length 1) and it returns how much grows there, from `1` (all of it) to
+`0` (none). In between, the hairs of `Hair` thin out, and the strands of
+`Fuzz` get shorter, so a patch of grass slopes down to the bare ground. It
+can also ask for the
 place on the skin, `grows(out, point)`: on a flat shape the skin faces
 almost the same way all over each side, and `point` tells one spot from
 another.
@@ -784,7 +786,7 @@ Useful to start a file from scratch with the viewer already open.
 | `Camera` | `target=(0, 0.5, 0)` (the point it looks at), `distance=4.0`, `yaw=25` (turn around that point, sideways), `pitch=15` (elevation: 0 looks straight on, higher looks from above), `lens=2.0` (larger = more zoom, less perspective) |
 | `Light` | `direction=(0.5, 0.7, 0.5)` (where it comes from), `color=(1.0, 0.95, 0.85)`, `intensity=1.0`. `sun=0.0`: above 0 draws the sun in the sky where the light comes from, and the number is its size (`1` is a natural one); clouds cover it and whatever mirrors the sky mirrors it. `halo=1.0` is how strong the glow around it is |
 | `Halo` | a glow hanging in the air around a point, as around a lamp in mist: `position`, `color=(1.0, 0.9, 0.6)`, `size=0.5` (how far it spreads), `strength=1.0` (it can change with time). It lights nothing, it is only seen, and what is in front of the point hides it |
-| `Ground` | `height=0.0`, `material=None`. `height` can also be a function of the position, for a hilly ground: `Ground(height=lambda p: 0.5 * claymarch.noise(p * 0.2))` (use `p.x` and `p.z`, gentle slopes). With hills, `top=` is an optional speed-up: a height the hills never exceed; above it they are not computed. If it is too low, the hilltops look cut off |
+| `Ground` | `height=0.0`, `material=None`. `height` can also be a function of the position, for a hilly ground: `Ground(height=lambda p: 0.5 * claymarch.noise(p * 0.2))` (use `p.x` and `p.z`, gentle slopes). With hills, `top=` is an optional speed-up: a height the hills never exceed; above it they are not computed. If it is too low, the hilltops look cut off. `fuzz=` covers the whole ground with a [`Fuzz`](#fur), for grass: with no `material` of its own, the strands take the ground's, drawn at the point where each one is, so the ground's material can ask how high above the soil that is and make the roots brown and the tips green |
 | `Clouds` | `cover=0.45` (how much of the sky they take, from 0 to 1), `size=1.0` (larger = bigger and fewer), `speed=0.03` and `direction=(1.0, 0.3)` (how fast the wind carries them and where to, as `(x, z)`), `color=(1, 1, 1)` (the lit side), `shade=(0.62, 0.68, 0.80)` (the other side). They are part of the background: nothing goes through them, and they show in whatever mirrors the sky |
 
 Besides the main light, the render adds on its own: sky light (`ambient`),
