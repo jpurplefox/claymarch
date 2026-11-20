@@ -579,6 +579,54 @@ def test_hair_can_ask_where_on_the_skin(tmp_path):
     assert "+vec3(0.0, 1.0, 0.0)).y)" in scene_text(Furry, tmp_path)
 
 
+def test_a_turned_shape_grows_its_hair_in_the_models_coordinates(tmp_path):
+    def top(out, point):
+        return claymarch.step(0.0, out.y) * claymarch.step(1.0, point.y)
+
+    class Furry(claymarch.Scene):
+        ball = claymarch.Ellipsoid(
+            0.3, 0.2, 0.4,
+            rotation=(0, 0, 90), size=2, position=(0, 1, 0),
+            hair=claymarch.Hair(flow=(0, -1, 0), grows=top),
+        )
+
+    code = scene_text(Furry, tmp_path).split("float map(")[1]
+    assert "turnIn(vec3(0.0, -1.0, 0.0),vec3(0.0, 0.0, 90.0))" in code
+    assert "step(0.0, turnOut(" in code
+    assert "*2.0,vec3(0.0, 0.0, 90.0))+vec3(0.0, 1.0, 0.0))" in code
+
+
+def test_a_moving_shape_takes_its_fur_along(tmp_path):
+    def swing(t):
+        return (0, 0, 30 * claymarch.sin(t))
+
+    class Furry(claymarch.Scene):
+        ball = claymarch.Ellipsoid(
+            0.3, 0.2, 0.4, rotation=swing, hair=claymarch.Hair()
+        )
+
+    code = scene_text(Furry, tmp_path).split("float map(")[1]
+    # the fur is combed as the shape was at the start, not as it is now
+    assert "turnIn(" not in code
+
+
+def test_a_models_fuzz_is_in_its_own_coordinates(tmp_path):
+    def top(out, point):
+        return claymarch.step(0.0, point.y)
+
+    class Ball(claymarch.Model):
+        ball = claymarch.Sphere(0.5)
+        fuzz = claymarch.Fuzz(grows=top)
+        rotation = (0, 0, 90)
+        position = (0, 1, 0)
+
+    class Furry(claymarch.Scene):
+        ball = Ball
+
+    code = scene_text(Furry, tmp_path).split("float map(")[1]
+    assert "turnIn(" not in code and "turnOut(" not in code
+
+
 def test_hair_grows_on_any_shape(tmp_path):
     class Furry(claymarch.Scene):
         neck = claymarch.Capsule(

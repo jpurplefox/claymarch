@@ -129,7 +129,9 @@ class Model(Shape):
         them), so it must not wrap itself in a bounding sphere: the sphere
         would show in the blend."""
         placement = {name: self._value(name) for name in (*_PLACEMENT, "symmetry", "ripple", "fuzz")}
-        return place(self._put_together(blended), **placement)
+        # the fuzz of a model is in the model's own coordinates, those its
+        # parts are written in
+        return place(self._put_together(blended), **placement, rest={})
 
     def _put_together(self, blended):
         """The parts joined and painted, in the model's own space."""

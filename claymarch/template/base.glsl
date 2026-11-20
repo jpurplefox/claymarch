@@ -11,6 +11,16 @@ float smin( float a, float b, float k )
 float smax( float a, float b, float k ) { return -smin(-a,-b,k); }
 
 mat2 rot2( float a ) { float c = cos(a), s = sin(a); return mat2(c,-s,s,c); }
+// A direction in a piece's own axes, from the axes it was turned from by
+// rotation= (degrees around x, y, z), and back (see _Frame)
+vec3 turnIn( vec3 v, vec3 a )
+{
+    a = radians(a); v.xy = rot2(a.z)*v.xy; v.xz = rot2(a.y)*v.xz; v.yz = rot2(a.x)*v.yz; return v;
+}
+vec3 turnOut( vec3 v, vec3 a )
+{
+    a = radians(a); v.yz = rot2(-a.x)*v.yz; v.xz = rot2(-a.y)*v.xz; v.xy = rot2(-a.z)*v.xy; return v;
+}
 
 // ---- distance function of each primitive
 float sdEllipsoid( vec3 p, vec3 r )

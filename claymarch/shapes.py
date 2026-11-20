@@ -222,9 +222,8 @@ class Shape:
     def rotate_y(self, degrees):          return _Rotate(self, "xz", degrees)
     def rotate_z(self, degrees):          return _Rotate(self, "xy", degrees)
     def scale(self, factor):              return _Scale(self, factor)
-    def fuzz(self, fuzz, center=(0.0, 0.0, 0.0)):
-        """A soft layer of strands: a Fuzz, or a list of them (see Fuzz).
-        center is added to the place on the skin that grows() is asked about."""
+    def fuzz(self, fuzz, _frame=None):
+        """A soft layer of strands: a Fuzz, or a list of them (see Fuzz)."""
         layers = _some(fuzz, Fuzz, "Fuzz(length=0.04, spacing=0.01)")
         if not layers:
             return self
@@ -232,9 +231,9 @@ class Shape:
             # the hair goes inside the bounding sphere, which grows to hold
             # it: outside, the hair's smooth shell would sit on the sphere's
             # edge, where the distance is the sphere's, and rays crawl there
-            fuzzy = _Fuzz(self.child, layers, center)
+            fuzzy = _Fuzz(self.child, layers, _frame)
             return _Bound(fuzzy, self.c, self.r + E(fuzzy.top))
-        return _Fuzz(self, layers, center)
+        return _Fuzz(self, layers, _frame)
     def ripple(self, height, size=0.2, drift=(0.0, 0.0, 0.0)):
         """An uneven surface that moves (see Ripple)."""
         return _Ripple(self, height, size, drift)
@@ -727,6 +726,16 @@ def _now(value):
     return value
 
 
+def _at_rest(value):
+    """A declared property as it is when the scene starts (t = 0)."""
+    if callable(value) and not isinstance(value, (Shape, Expr, Material, type)):
+        return value(0.0) if inspect.signature(value).parameters else value()
+    return value
+
+
+_FRAMED = ("size", "rotation", "pivot", "position")
+
+
 def _zero(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and value == 0
 
@@ -751,8 +760,12 @@ class _Combed:
 
     grows(out) says how thick they grow, 1 all of them and 0 none, where the
     skin looks toward out (of length 1). It can also ask for the place on
-    the skin: grows(out, point). Both are in the coordinates of the model
-    the shape is in.
+    the skin: grows(out, point).
+
+    out, point, flow and wind are in the coordinates the fur's piece is
+    written in: for a shape, those of the model it is in, however the shape
+    is turned or sized; for a Model, its own. A piece that moves takes its
+    fur along, glued to the skin, as it was when the scene started.
 
     `material` is drawn in each strand's own coordinates: x is a random
     number of that strand (0 to 1), y how far it is out of the skin, and z
@@ -761,8 +774,8 @@ class _Combed:
 
     `wind`, (x, y, z), pushes the strands its way: it lays them over and
     turns them, but never stands them up past their lift; 1 pushes as hard
-    as the combing pulls. It comes in gusts about `gusts` across that travel with
-    it at one unit per second, measured where the strands are, so they run
+    as the combing pulls. It comes in gusts about `gusts` across that travel
+    with it at one unit per second, measured where the strands are, so they run
     on from one shape into the next."""
     flow = (0.0, 0.0, -1.0)
     length = 0.10
@@ -847,13 +860,42 @@ class Hair(_Combed):
         common = (flow, self.length, self.width, self.spacing, self.lift, self.seed, self._grows())
         radii = _const(skin.r) if type(skin) is Ellipsoid else None
         if radii is not None:
-            position = placement.get("position", (0.0, 0.0, 0.0))
-            hairs = place(_Hairs(radii, *common, center=position, wind=wind, gusts=gusts, skin_look=own is None),
+            frame = _Frame(**{k: _at_rest(declared[k]) for k in _FRAMED if k in declared})
+            hairs = place(_Hairs(radii, *common, frame=frame, wind=wind, gusts=gusts, skin_look=own is None),
                           **placement)
         else:
             hairs = _HairsOn(place(skin, **placement), *common, wind=wind, gusts=gusts, skin_look=own is None)
         material = own if own is not None else _now(declared.get("material"))
         return hairs.paint(material) if material is not None else hairs
+
+
+class _Frame:
+    """How a shape's own space sits in the model it is in: its size,
+    rotation, pivot and position as they are when the scene starts (see
+    place; bend and symmetry are left out). Fuzz and Hair are worked out in
+    the shape's own space; with this they tell grows() where it is in the
+    model, and take flow and wind as written in the model. A shape that
+    moves takes its fur along, glued to the skin."""
+    def __init__(self, size=1.0, rotation=(0.0, 0.0, 0.0), pivot=(0.0, 0.0, 0.0), position=(0.0, 0.0, 0.0)):
+        self.size, self.rotation, self.pivot, self.position = size, tuple(rotation), tuple(pivot), tuple(position)
+        self.grows = not (isinstance(size, (int, float)) and size == 1)
+        self.turns = not all(_zero(a) for a in self.rotation)
+    def point(self, at):
+        """GLSL for where a point of the shape's own space is in the model."""
+        if not (self.grows or self.turns):
+            return f"({at}+{E(self.position).code})"
+        q = f"({at}-{E(self.pivot).code})"
+        if self.grows:
+            q = f"{q}*{E(self.size).code}"
+        if self.turns:
+            q = f"turnOut({q},{E(self.rotation).code})"
+        return f"({q}+{E(tuple(a + b for a, b in zip(self.pivot, self.position))).code})"
+    def out(self, way):
+        """GLSL for a direction of the shape's own space, in the model."""
+        return f"turnOut({way},{E(self.rotation).code})" if self.turns else way
+    def into(self, way):
+        """GLSL for a direction of the model, in the shape's own space."""
+        return f"turnIn({way},{E(self.rotation).code})" if self.turns else way
 
 
 def _some(value, kind, example):
@@ -876,10 +918,11 @@ def _given(value, kind, example):
 
 
 def place(shape, size=1.0, rotation=(0.0, 0.0, 0.0), position=(0.0, 0.0, 0.0),
-          bend=(0.0, 0.0), symmetry=None, ripple=None, pivot=(0.0, 0.0, 0.0), fuzz=None):
+          bend=(0.0, 0.0), symmetry=None, ripple=None, pivot=(0.0, 0.0, 0.0), fuzz=None, rest=None):
     """Fuzz, then ripple, then size, then rotation (x, y, z), then position, then bend
     (around x, around z), then symmetry. Anything left at its neutral value
-    adds no code to the shader.
+    adds no code to the shader. rest is size, rotation, pivot and position
+    as they are when the scene starts, for the fuzz (see _Frame).
 
     pivot is the point of the shape that size and rotation leave where it
     is: they act around it instead of around the origin."""
@@ -887,7 +930,9 @@ def place(shape, size=1.0, rotation=(0.0, 0.0, 0.0), position=(0.0, 0.0, 0.0),
     mirror = symmetry
     ripple = _given(ripple, Ripple, "Ripple(height=0.1, size=0.3)")
     if fuzz is not None:
-        shape = shape.fuzz(fuzz, center=position)
+        if rest is None:
+            rest = {"size": size, "rotation": rotation, "pivot": pivot, "position": position}
+        shape = shape.fuzz(fuzz, _Frame(**rest))
     if ripple is not None:
         shape = shape.ripple(ripple.height, ripple.size, ripple.drift)
     rx, ry, rz = rotation
@@ -903,13 +948,18 @@ def place(shape, size=1.0, rotation=(0.0, 0.0, 0.0), position=(0.0, 0.0, 0.0),
         position = tuple(a + b for a, b in zip(pivot, position))
     if grows:
         shape = shape.scale(size)
-    if not _zero(rx): shape = shape.rotate_x(rx)
-    if not _zero(ry): shape = shape.rotate_y(ry)
-    if not _zero(rz): shape = shape.rotate_z(rz)
+    if not _zero(rx):
+        shape = shape.rotate_x(rx)
+    if not _zero(ry):
+        shape = shape.rotate_y(ry)
+    if not _zero(rz):
+        shape = shape.rotate_z(rz)
     if not all(_zero(c) for c in position):
         shape = shape.move(*position)
-    if not _zero(bend_x): shape = shape.bend_x(bend_x)
-    if not _zero(bend_z): shape = shape.bend_z(bend_z)
+    if not _zero(bend_x):
+        shape = shape.bend_x(bend_x)
+    if not _zero(bend_z):
+        shape = shape.bend_z(bend_z)
     if mirror is not None:
         shape = shape.mirror(mirror)
     return shape
@@ -983,7 +1033,10 @@ class _Declared(Shape):
             material = _now(self._declared.get("material"))
             if material is not None:
                 shape = shape.paint(material)
-            self.__dict__["_shape"] = place(shape, **declared) if declared else shape
+            if declared:
+                rest = {k: _at_rest(self._declared[k]) for k in _FRAMED if k in self._declared}
+                shape = place(shape, **declared, rest=rest)
+            self.__dict__["_shape"] = shape
         return self._shape
 
     @property
@@ -1671,8 +1724,8 @@ def _strand_number(root, spacing):
 
 class _Fuzz(Shape):
     """A shape with fuzz: soft layers of strands around its surface, one
-    for each Fuzz (see there). `center` is added to the place on the skin
-    that grows() is asked about.
+    for each Fuzz (see there). `frame` is where the shape sits in its model
+    (see _Frame).
 
     The hair is not a surface. While a ray looks for what it hits, the
     outside of the hair is (a smooth shell, as far out from the skin as the
@@ -1680,8 +1733,8 @@ class _Fuzz(Shape):
     hair in short steps, gathering the strands it passes (gHair, see
     render), and sees the skin or what is behind through whatever they let
     pass."""
-    def __init__(self, child, layers, center=(0.0, 0.0, 0.0)):
-        self.child, self.layers, self.center = child, list(layers), tuple(center)
+    def __init__(self, child, layers, frame=None):
+        self.child, self.layers, self.frame = child, list(layers), frame or _Frame()
         for layer in self.layers:
             for name in ("length", "spacing", "lift", "density"):
                 if not isinstance(getattr(layer, name), (int, float)):
@@ -1715,8 +1768,9 @@ class _Fuzz(Shape):
         the way the strands lie, as far as they lean at this height."""
         way, up, h, root, s, k = (ctx.var(x) for x in ("way", "up", "h", "root", "s", "k"))
         c = _num(f.spacing)
-        push = _push(_now(f.wind), _now(f.gusts), "p0")
-        ctx.line(f"  vec3 {way} = strand({_combing(_now(f.flow))},{push},{n},{_num(math.radians(f.lift))});")
+        push = self.frame.into(_push(_now(f.wind), _now(f.gusts), "p0"))
+        flow = self.frame.into(_combing(_now(f.flow)))
+        ctx.line(f"  vec3 {way} = strand({flow},{push},{n},{_num(math.radians(f.lift))});")
         # how far up the strand rises for each unit of its length
         ctx.line(f"  float {up} = max(dot({way},{n}),0.05);")
         ctx.line(f"  float {h} = clamp({d}/({_num(f.length)}*{up}),0.0,1.0);")
@@ -1724,7 +1778,7 @@ class _Fuzz(Shape):
         # a strand grows where the fine noise is high; how long it is, the
         # coarse one decides, so the hair comes in locks
         ctx.line(f"  float {s} = noise3({root}/({c}*6.0)+3.7);")
-        thick = _thickness(f._grows(), n, f"({skin}+{E(self.center).code})")
+        thick = _thickness(f._grows(), self.frame.out(n), self.frame.point(skin))
         dense = "" if f.density == 1 else f"{_num(f.density)}*"
         ctx.line(f"  float {k} = {dense}{thick}*smoothstep(0.45,0.65,noise3({root}/{c}))"
                  f"*clamp((0.3+0.7*{s}-{h})/0.15,0.0,1.0);")
@@ -1762,7 +1816,7 @@ class _Hairs(Shape):
 
     `grows(out)` or `grows(out, point)`, if given, says how thick the hair
     is (0 to 1) where the skin looks toward out; point is that place on the
-    skin, `center` added. `wind`, a direction, bends the hair its way in
+    skin; both are in the model (see _Frame). `wind`, a direction, bends the hair its way in
     gusts (see _strand). Hairs get their material in their own
     coordinates: x is a random number of each hair (0 to 1), y how far out
     of the skin, z along the hair from its root; with skin_look, in the
@@ -1770,7 +1824,7 @@ class _Hairs(Shape):
     fade = (0.7, 3.0)  # the hairs thin out from a pixel this many hairs wide to that one
     density = 2.0  # how much the fuzz hides, where it has taken over
     def __init__(self, radii, flow, length, width, spacing, lift, seed, grows=None,
-                 center=(0.0, 0.0, 0.0), wind=None, gusts=0.5, skin_look=False):
+                 frame=None, wind=None, gusts=0.5, skin_look=False):
         if len(radii) != 3 or len(flow) != 3:
             raise TypeError("hair: radii and flow have three numbers, (x, y, z)")
         if wind is not None and len(wind) != 3:
@@ -1778,16 +1832,16 @@ class _Hairs(Shape):
         self.radii, self.flow = tuple(radii), tuple(flow)
         self.length, self.width, self.spacing = length, width, spacing
         self.lift, self.seed, self.grows = math.radians(lift), seed, grows
-        self.center, self.wind, self.gusts = tuple(center), wind, gusts
+        self.frame, self.wind, self.gusts = frame or _Frame(), wind, gusts
         self.skin_look = skin_look
     def _combing(self):
         return _combing(self.flow)
     def _strand(self, at, out):
         """GLSL for which way a hair at `at` goes (see strand in the GLSL),
-        the wind's gusts measured with `center` added, so they run on from
-        one shape into the next."""
-        push = _push(self.wind, self.gusts, f"({at}+{E(self.center).code})")
-        return f"strand({self._combing()},{push},{out},{_num(self.lift)})"
+        the wind's gusts measured where it is in the model, so they run on
+        from one shape into the next."""
+        push = self.frame.into(_push(self.wind, self.gusts, self.frame.point(at)))
+        return f"strand({self.frame.into(self._combing())},{push},{out},{_num(self.lift)})"
     def emit(self, ctx, p, mat):
         F = self._combing()
         L, W, c = self.length, self.width, self.spacing
@@ -1901,7 +1955,7 @@ class _Hairs(Shape):
         ctx.line(f"    vec3 {root} = {j}/{k}; vec3 {out} = normalize({root}/({R}*{R}));")
     def _thickness(self, out, root):
         """GLSL for how thick the hair is at a place on the skin."""
-        return _thickness(self.grows, out, f"({root}+{E(self.center).code})")
+        return _thickness(self.grows, self.frame.out(out), self.frame.point(root))
     def spheres(self):
         pad = self.length + self.width
         return [(center, radius + pad) for center, radius in Ellipsoid(*self.radii).spheres()]

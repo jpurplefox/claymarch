@@ -228,7 +228,15 @@ of length 1) and it returns how thick the strands grow there, from `1` (all
 of them) to `0` (none); in between they thin out. It can also ask for the
 place on the skin, `grows(out, point)`: on a flat shape the skin faces
 almost the same way all over each side, and `point` tells one spot from
-another. Both are in the coordinates of the model the shape is in.
+another.
+
+`out`, `point`, `flow` and `wind` are in the coordinates the piece with the
+fur is written in. On a shape, those are the coordinates of the model it is
+in, the ones its `position` is written in, however the shape is turned or
+sized: `out.y > 0` is the top of the shape as it sits in the model. On a
+`Model`, they are the model's own, the ones its parts are written in. A
+piece that moves (a `rotation` that changes with `t`) takes its fur along,
+glued to the skin: the directions are those of when the scene starts.
 
 A `material` is drawn in each strand's own coordinates: `p.x` is a random
 number of that strand (0 to 1), `p.y` how far out of the skin and `p.z` how
