@@ -204,7 +204,7 @@ class Bark(claymarch.Material):
         grain = claymarch.fbm(p * (10.0, 10.0, 1.4))
         wood = claymarch.mix((0.28, 0.18, 0.11), (0.56, 0.41, 0.25), grain)
         # el fondo de las grietas, más oscuro
-        wood = claymarch.mix((0.20, 0.13, 0.08), wood, cracks(p))
+        wood = claymarch.mix((0.30, 0.20, 0.12), wood, cracks(p))
         # un moteado fino, para que de cerca no quede liso
         wood = wood * (0.85 + 0.3 * claymarch.noise(p * 45))
         moss = bark_moss(p)
@@ -216,7 +216,7 @@ class Bark(claymarch.Material):
     def bump(self, p):
         # las grietas se hunden; encima, la veta y el moteado
         return (
-            0.02 * cracks(p)
+            0.014 * cracks(p)
             + 0.008 * claymarch.fbm(p * (20.0, 20.0, 2.5))
             + 0.002 * claymarch.noise(p * 45)
         )
