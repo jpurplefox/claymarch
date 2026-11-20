@@ -321,6 +321,12 @@ _RENDER = r"""
 // ===================================================================
 //@CONSTANTS
 
+// The GPU has no real function calls: every call to map() is a whole copy
+// of the scene in the compiled shader. A loop that starts at ZERO (0, but
+// the compiler does not know it) is not unrolled, so what it calls is
+// copied once.
+#define ZERO min(iFrame,0)
+
 // Which way the ray being advanced is going (zero when there is no ray, as when
 // normals are computed). Repetitions use it to know how far the cell wall is.
 vec3 gRd = vec3(0.0);
@@ -381,11 +387,18 @@ float mapD( in vec3 p )
 // ===================================================================
 // Render: the same for every scene
 // ===================================================================
+// The four points around pos are measured in a loop the compiler cannot
+// unroll (see ZERO): one copy of the scene instead of four, and the shader
+// compiles in about half the time.
 vec3 calcNormal( in vec3 pos )
 {
-    vec2 e = vec2(1.0,-1.0)*0.0015;
-    return normalize( e.xyy*mapD(pos+e.xyy) + e.yyx*mapD(pos+e.yyx) +
-                      e.yxy*mapD(pos+e.yxy) + e.xxx*mapD(pos+e.xxx) );
+    vec3 n = vec3(0.0);
+    for( int i=ZERO; i<4; i++ )
+    {
+        vec3 k = 2.0*vec3(float(((i+3)>>1)&1),float((i>>1)&1),float(i&1))-1.0;
+        n += k*mapD(pos+k*0.0015);
+    }
+    return normalize(n);
 }
 
 // Hair is soft: neither shadows nor ambient occlusion take its smooth
@@ -488,21 +501,27 @@ vec3 glowAir( in vec3 ro, in vec3 rd, in float t )
     return g;
 }
 
-// The color of a surface under the light. The highlight comes apart (spe),
-// because on a see-through surface it stays whole while the rest fades.
-vec3 shade( in vec3 pos, in vec3 rd, in float mat, in vec3 uvw,
-            out vec3 nor, out vec3 alb, out vec3 spe, out float opa )
+// How much of the key light reaches pos (1 all of it, 0 none), on a surface
+// facing nor. A surface facing away from the light is dark anyway, so it
+// gets no shadow ray, unless lit says it is hair, which the light reaches
+// from all around.
+float shadowAt( in vec3 pos, in vec3 nor, in bool lit )
 {
-    nor = calcNormal(pos);
+    return (lit || dot(nor,LIGHT_DIR)>0.0) ? softShadow( pos+nor*0.005, LIGHT_DIR ) : 0.0;
+}
 
+// The color of a surface under the light, given which way it faces (nor)
+// and its shadow (sha). The highlight comes apart (spe), because on a
+// see-through surface it stays whole while the rest fades.
+vec3 shade( in vec3 pos, in vec3 rd, in float mat, in vec3 uvw, in vec3 nor, in float sha,
+            out vec3 alb, out vec3 spe, out float opa )
+{
     float ks, se, emi, rfl, shn;
     material( mat, uvw, alb, ks, se, emi, opa, rfl, shn );
     alb = pow( max(alb,0.0), vec3(2.2) );      // colors are written as seen on screen
 
     float occ = calcAO(pos,nor);
-    // a surface facing away from the light is dark anyway: no shadow ray needed
     float ndl = clamp(dot(nor,LIGHT_DIR),0.0,1.0);
-    float sha = ndl>0.0 ? softShadow( pos+nor*0.005, LIGHT_DIR ) : 0.0;
     float dif = ndl*sha;
     float fre = pow( clamp(1.0+dot(nor,rd),0.0,1.0), 3.0 );
 
@@ -558,75 +577,85 @@ vec3 render( in vec3 ro, in vec3 rd )
         t += max(-h,0.0) + 0.05;
     }
     gRd = vec3(0.0);
-    t = march( ro, rd, t, mat, uvw, seen );
 
-    // Hair: the ray reached the outside of the hair of something furry. From
-    // there it walks in short steps, gathering the strands it passes, until
-    // it reaches the skin, leaves the hair, or the hair hides everything.
-    // What is behind is seen through what the strands let pass (hairT), and
-    // may be the hair of something else: up to three, one after the other.
+    // The ray goes on until it touches something. If that is the outside of
+    // the hair of something furry, from there it walks in short steps,
+    // gathering the strands it passes, until it reaches the skin, leaves the
+    // hair, or the hair hides everything. What is behind is seen through what
+    // the strands let pass (hairT), and may be the hair of something else:
+    // up to three, one after the other.
+    // Every pass works out which way the surface faces and its shadow, in
+    // one place, whether for the hair or for the surface that is shaded at
+    // the end; and march is called from one place only. In a loop that is
+    // not unrolled, each is one copy of the scene (see ZERO).
     vec3 hairCol = vec3(0.0); float hairT = 1.0;
-    for( int pass=0; pass<3; pass++ )
+    vec3 pos = ro, nor = vec3(0.0,1.0,0.0); float sha = 1.0;
+    bool skin = false;          // the walk through the hair reached the skin
+    for( int pass=ZERO; pass<4; pass++ )
     {
-        if( !HAIRY || !seen ) break;
-        vec3 pos = ro + t*rd;
-        gHairy = 0; map( pos );
+        if( !skin ) t = march( ro, rd, t, mat, uvw, seen );
+        if( !seen ) break;
+        pos = ro + t*rd;
         // only where the hair really is: what the ray hit (the ground, say)
-        // may be near something furry and still out of reach of its hair
-        // the ray stops a little short of the hair's outside (as close as
-        // march asks for), so the reach is that much longer
+        // may be near something furry and still out of reach of its hair.
+        // The ray stops a little short of the hair's outside (as close as
+        // march asks for), so the reach is that much longer. gHairRoot is
+        // still the one march found where it stopped.
         float reach = HAIR_REACH + 0.0005*t + 0.0002;
-        if( gHairRoot>=reach || gHairRoot<=0.002 ) break;
-        {
-            // the light is worked out once, where the ray goes in
-            vec3 nor = calcNormal( pos );
-            float sha = softShadow( pos+nor*0.01, LIGHT_DIR );
-            float wrap = clamp( 0.5+0.5*dot(nor,LIGHT_DIR), 0.0, 1.0 );
-            // hair glows when the light is behind it
-            float back = pow( clamp(dot(rd,LIGHT_DIR),0.0,1.0), 4.0 );
-            vec3 lit = LIGHT_COL*(wrap*(0.3+0.7*sha) + 0.8*back*sha) + 0.35*AMBIENT;
-            gHairy = 2; gRd = rd; seen = false;
+        bool furry = HAIRY && !skin && pass<3 && gHairRoot<reach && gHairRoot>0.002;
+        gHairy = furry ? 0 : 1;
+        nor = calcNormal( pos );
+        sha = shadowAt( pos, nor, furry );
+        if( !furry ) break;
+
+        // the light on the hair is worked out once, where the ray goes in
+        float wrap = clamp( 0.5+0.5*dot(nor,LIGHT_DIR), 0.0, 1.0 );
+        // hair glows when the light is behind it
+        float back = pow( clamp(dot(rd,LIGHT_DIR),0.0,1.0), 4.0 );
+        vec3 lit = LIGHT_COL*(wrap*(0.3+0.7*sha) + 0.8*back*sha) + 0.35*AMBIENT;
+        gHairy = 2; gRd = rd; seen = false;
 //@FUZZ_RESET
-            for( int i=0; i<128; i++ )
+        for( int i=0; i<128; i++ )
+        {
+            float h = map( ro+t*rd, mat, uvw );
+            // mat<0 is a safe guess, not a surface (see march)
+            if( h<0.0005*t+0.0002 && mat>-0.5 ) { seen = true; break; }
+            if( gHairRoot>reach ) break;
+            // steps no finer than a pixel there: detail smaller than that
+            // cannot be drawn, so far away the walk takes longer strides
+            float foot = t*gPixel;
+            float stp = clamp( h, max(0.0015,foot), max(gHairStep,2.0*foot) );
+            if( gHair>0.0 )
             {
-                float h = map( ro+t*rd, mat, uvw );
-                // mat<0 is a safe guess, not a surface (see march)
-                if( h<0.0005*t+0.0002 && mat>-0.5 ) { seen = true; break; }
-                if( gHairRoot>reach ) break;
-                // steps no finer than a pixel there: detail smaller than that
-                // cannot be drawn, so far away the walk takes longer strides
-                float foot = t*gPixel;
-                float stp = clamp( h, max(0.0015,foot), max(gHairStep,2.0*foot) );
-                if( gHair>0.0 )
-                {
-                    vec3 alb; float ks, se, emi, opa, rfl, shn;
-                    material( gHairMat, gHairUvw, alb, ks, se, emi, opa, rfl, shn );
-                    alb = pow( max(alb,0.0), vec3(2.2) );
-                    // darker down at the roots, where less light gets in
-                    vec3 strand = alb*lit*(0.3+0.7*gHairUp);
-                    // far away it fades into the haze, as surfaces do
-                    strand = fade( strand, sky, t );
-                    float a = 1.0-exp( -gHair*HAIR_THICK*stp );
-                    hairCol += hairT*a*strand;
-                    hairT *= 1.0-a;
-                    if( hairT<0.02 ) break;
-                }
-                t += stp;
+                vec3 alb; float ks, se, emi, opa, rfl, shn;
+                material( gHairMat, gHairUvw, alb, ks, se, emi, opa, rfl, shn );
+                alb = pow( max(alb,0.0), vec3(2.2) );
+                // darker down at the roots, where less light gets in
+                vec3 strand = alb*lit*(0.3+0.7*gHairUp);
+                // far away it fades into the haze, as surfaces do
+                strand = fade( strand, sky, t );
+                float a = 1.0-exp( -gHair*HAIR_THICK*stp );
+                hairCol += hairT*a*strand;
+                hairT *= 1.0-a;
+                if( hairT<0.02 ) break;
             }
-            gRd = vec3(0.0);
-            gHairy = 1;
-            if( seen || hairT<0.02 ) break;
-            // left the hair without touching anything: go on to what is
-            // behind, hair included while there are passes left
-            gHairy = pass<2 ? 0 : 1;
-            t = march( ro, rd, t, mat, uvw, seen );
+            t += stp;
         }
+        gRd = vec3(0.0);
+        gHairy = 1;
+        // the hair hides everything: what little it lets pass, as sky
+        if( hairT<0.02 ) return hairCol + hairT*(sky + orb);
+        // reached the skin: the next pass lights it, without marching
+        skin = seen;
+        seen = true;
+        // left the hair without touching anything: go on to what is
+        // behind, hair included while there are passes left
+        if( !skin ) gHairy = pass<2 ? 0 : 1;
     }
     if( !seen ) return hairCol + hairT*(sky + orb + glowAir(ro,rd,1e4));
 
-    vec3 pos = ro + t*rd;
-    vec3 nor, alb, spe; float opa;
-    vec3 col = shade( pos, rd, mat, uvw, nor, alb, spe, opa );
+    vec3 alb, spe; float opa;
+    vec3 col = shade( pos, rd, mat, uvw, nor, sha, alb, spe, opa );
     if( opa>0.999 ) return hairCol + hairT*(fade( col+spe, sky, t ) + glowAir(ro,rd,t));
 
     // See-through: the ray goes on, a little bent, through a scene without
@@ -641,8 +670,9 @@ vec3 render( in vec3 ro, in vec3 rd )
     float t2 = march( pos, rd2, 0.02, matB, uvwB, seen2 );
     if( seen2 )
     {
-        vec3 nor2, alb2, spe2; float opa2;
-        behind = shade( pos+t2*rd2, rd2, matB, uvwB, nor2, alb2, spe2, opa2 ) + spe2;
+        vec3 pos2 = pos+t2*rd2, nor2 = calcNormal( pos2 ), alb2, spe2; float opa2;
+        behind = shade( pos2, rd2, matB, uvwB, nor2, shadowAt( pos2, nor2, false ),
+                        alb2, spe2, opa2 ) + spe2;
         behind = fade( behind, sky2, t+t2 );
     }
     gSolid = false;
