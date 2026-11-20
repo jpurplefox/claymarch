@@ -106,6 +106,27 @@ float sdTorus( vec3 p, float R, float r )
     return length( vec2(length(p.xz)-R,p.y) ) - r;
 }
 
+// Which way a hair lies on skin that looks toward n, combed toward flow.
+// Where the flow goes straight into or out of the skin, it falls downward.
+vec3 combed( vec3 flow, vec3 n )
+{
+    vec3 way = flow - n*dot(flow,n);
+    vec3 down = vec3(0.0,-1.0,0.0) - n*(-n.y);
+    way += down*(1.0-smoothstep(0.0,0.5,length(way)));
+    return way/max(length(way),1e-4);
+}
+
+// Which way a strand goes from its root (of length 1): it rises lift
+// (radians) off skin that looks toward n, combed toward flow. push (the
+// wind) lays it over and turns it, but does not stand it up past its lift.
+vec3 strand( vec3 flow, vec3 push, vec3 n, float lift )
+{
+    vec3 way = combed(flow,n)*cos(lift) + push - n*dot(push,n);
+    float along = length(way);
+    if( along<cos(lift) ) way = along>1e-4 ? way*cos(lift)/along : combed(flow,n)*cos(lift);
+    return normalize( way + n*sin(lift) );
+}
+
 // ---- procedural noise
 uint uhash( uint x )
 {

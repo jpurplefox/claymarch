@@ -32,6 +32,10 @@ def find_scene(namespace, filename):
 
 
 def generate(source, out):
+    # a scene can import the files next to it (shared pieces, say)
+    folder = str(Path(source).resolve().parent)
+    if folder not in sys.path:
+        sys.path.insert(0, folder)
     find_scene(runpy.run_path(str(source)), source.name).export(out)
 
 
@@ -76,6 +80,8 @@ def main():
     ap.add_argument("--fps", type=int, default=30, help="video frames per second (default 30)")
     ap.add_argument("--zoom", type=float, default=1.0, help="video: camera distance factor (bigger = farther)")
     ap.add_argument("--sway", type=float, default=0.0, help="video: degrees the camera sways side to side")
+    ap.add_argument("--orbit", type=float, default=0.0,
+                    help="video: degrees the camera travels around the scene over the whole video (360 = once around)")
     ap.add_argument("--yaw", type=float, default=0.0, help="video: degrees the camera is turned sideways from the scene's own")
     ap.add_argument("--pitch", type=float, default=0.0, help="video: degrees the camera is raised from the scene's own")
     ap.add_argument("--right", type=float, default=0.0,
@@ -93,7 +99,6 @@ def main():
     if not source.exists():
         sys.exit(f"{source} does not exist")
     out = Path(args.out) if args.out else Path("build") / source.stem
-    sys.path.insert(0, str(source.parent))
 
     out.mkdir(parents=True, exist_ok=True)
 
@@ -127,7 +132,7 @@ def main():
         job = {"target": Path(args.video).resolve(), "done": threading.Event(), "saved": None}
         server.video_job = job
         url = (f"http://localhost:{args.port}/?record=1&w={width}&h={height}&seconds={args.seconds}"
-               f"&fps={args.fps}&zoom={args.zoom}&sway={args.sway}&yaw={args.yaw}&pitch={args.pitch}"
+               f"&fps={args.fps}&zoom={args.zoom}&sway={args.sway}&orbit={args.orbit}&yaw={args.yaw}&pitch={args.pitch}"
                f"&blend={args.blend}&right={args.right}&up={args.up}&lens={args.lens}")
         print(f"drawing {round(args.seconds * args.fps)} frames at {width}x{height} in the browser:\n  {url}\n"
               "keep that tab visible until it says 'saved' (Ctrl+C to cancel)", flush=True)

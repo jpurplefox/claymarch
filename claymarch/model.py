@@ -16,38 +16,30 @@ and returns the value. Nothing else is needed to animate.
 A Model is itself a Shape, so a model can be a part of another model, and can
 be moved, mirrored or combined like any other shape.
 """
+import copy
 import inspect
 
 from .expr import T, Expr
-from .shapes import Material, Shape, _Bound, _Repaint, as_material, assemble, collect_parts, place, role_of
+from .shapes import (Material, Shape, _Bound, _Declared, _Repaint, as_material, assemble,
+                     collect_parts, is_part, with_hair, part_names as _part_names, place, role_of)
 
 
 def _is(value, number):
     return isinstance(value, (int, float)) and value == number
 
 
-# The poses of the models being built right now, outermost first (see pose).
-_POSES = []
-_POSABLE = ("size", "rotation", "pivot", "position", "bend")
+_PLACEMENT = ("size", "rotation", "pivot", "position", "bend")
 
 
-class _Posed(Shape):
-    """A model whose pose reaches the pieces inside it. They are built late,
-    when the shape is walked, so the pose is put back each time it is."""
-    def __init__(self, child, pose):
-        self.child, self.pose = child, pose
-    def _inside(self, walk):
-        _POSES.append(self.pose)
-        try:
-            return walk()
-        finally:
-            _POSES.pop()
-    def emit(self, ctx, p, mat):
-        return self._inside(lambda: self.child.emit(ctx, p, mat))
-    def spheres(self):
-        return self._inside(self.child.spheres)
-    def weight(self):
-        return self._inside(self.child.weight)
+def _own(part):
+    """A copy of a part, for a model to change without changing the class."""
+    if isinstance(part, type) and getattr(part, "_is_model", False):
+        return part()
+    if isinstance(part, Model):
+        return part._copied()
+    if isinstance(part, _Declared):
+        return copy.copy(part)
+    return part
 
 
 class Model(Shape):
@@ -58,8 +50,9 @@ class Model(Shape):
     smooth = 0.0                    # transition radius used to join the parts
     material = None                 # Material (instance or class) for parts that have none
     repaint = None                  # {a material: the one that replaces it}, anywhere inside the model
-    pose = None                     # {a Model class: {"rotation": ...}}: how the pieces inside are placed
-    ripple = None                   # (height, size) or (height, size, flow): a lumpy surface that moves
+    ripple = None                   # Ripple(height, size, drift): a lumpy surface that moves
+    fuzz = None                     # Fuzz(...), or a list: a soft layer of strands over the whole model
+    hair = None                     # Hair(...), or a list: single hairs on each of its shapes
     size = 1.0                      # uniform scale
     rotation = (0.0, 0.0, 0.0)      # degrees around x, y, z
     pivot = (0.0, 0.0, 0.0)         # the point of the model that size and rotation act around
@@ -75,23 +68,56 @@ class Model(Shape):
     bounds = None
 
     def __init__(self, **overrides):
-        """Critter(position=(1, 0, 0)) changes a property for this one instance."""
+        """Critter(position=(1, 0, 0)) changes a property for this one instance.
+
+        Each instance has its own parts, copied from the class, so changing
+        one (in setup) does not change it anywhere else."""
+        for name in _part_names(type(self)):
+            self.__dict__[name] = _own(getattr(type(self), name))
         for name, value in overrides.items():
             if not hasattr(type(self), name):
                 raise TypeError(f"{type(self).__name__} has no property '{name}'")
             setattr(self, name, value)
+        if inspect.signature(self.setup).parameters:
+            self.setup(T)
+        else:
+            self.setup()
+
+    def setup(self):
+        """Change the pieces inside, once the model is made: plain Python on
+        this instance and its pieces, which are its own.
+
+            def setup(self):
+                self.head.ears.fuzz = Fuzz(length=0.03, spacing=0.006)
+                self.tail.tip = Sphere(0.1, position=(0, 0, -0.7))   # a new part
+                self.legs = None                                     # no legs
+
+        It may receive t, to animate what it changes:
+            def setup(self, t):
+                self.tail.rotation = (0, 20 * sin(t), 0)"""
+
+    def __setattr__(self, name, value):
+        known = name.startswith("_") or hasattr(type(self), name) or name in self.__dict__
+        if not known and not is_part(value):
+            raise AttributeError(
+                f"{type(self).__name__} has no property '{name}' (a new part is a Shape, a Model or a drawing)")
+        super().__setattr__(name, value)
+
+    _hair_above = None              # the hair of the model this one is in
+
+    def _hand_down_hair(self, hair):
+        """The hair of the model this one is in, for when it has none."""
+        self._hair_above = hair
+
+    def _copied(self):
+        """This instance, with copies of the models inside it."""
+        twin = copy.copy(self)
+        for name, value in vars(self).items():
+            twin.__dict__[name] = _own(value)
+        return twin
 
     def _value(self, name):
         v = getattr(self, name)
-        if name in _POSABLE:
-            # a model this one is inside of may say where it goes: the
-            # outermost one that says so has the last word
-            for pose in _POSES:
-                said = [changes[name] for piece, changes in pose.items()
-                        if isinstance(self, piece) and name in changes]
-                if said:
-                    v = said[0]
-                    break
         if callable(v) and not isinstance(v, (Shape, Expr, Material, type)):
             v = v(T) if inspect.signature(v).parameters else v()
         return v
@@ -102,40 +128,18 @@ class Model(Shape):
         blended: the model is a part that melts into its neighbors (or cuts
         them), so it must not wrap itself in a bounding sphere: the sphere
         would show in the blend."""
-        # where the model itself goes is read first: its own pose is for the
-        # pieces inside it, not for itself
-        placement = {name: self._value(name) for name in (*_POSABLE, "symmetry", "ripple")}
-        pose = self._pose()
-        if not pose:
-            return place(self._put_together(blended), **placement)
-        _POSES.append(pose)
-        try:
-            shape = self._put_together(blended)
-        finally:
-            _POSES.pop()
-        return _Posed(place(shape, **placement), pose)
-
-    def _pose(self):
-        pose = self._value("pose")
-        if not pose:
-            return None
-        if not isinstance(pose, dict):
-            raise TypeError("pose is a dictionary: {a Model class: {\"rotation\": ...}}")
-        for piece, changes in pose.items():
-            if not (isinstance(piece, type) and issubclass(piece, Model)):
-                raise TypeError(f"pose: pieces are named by their class (a Model), not {piece!r}")
-            wrong = None if isinstance(changes, dict) else changes
-            wrong = wrong or next((name for name in changes if name not in _POSABLE), None)
-            if wrong is not None:
-                raise TypeError(f"pose: {piece.__name__} can be given {', '.join(_POSABLE)}, not {wrong!r}")
-        return pose
+        placement = {name: self._value(name) for name in (*_PLACEMENT, "symmetry", "ripple", "fuzz")}
+        return place(self._put_together(blended), **placement)
 
     def _put_together(self, blended):
         """The parts joined and painted, in the model's own space."""
+        hair = self._value("hair")
+        if hair is None and self._value("carve") is None and self._value("clip") is None:
+            hair = self._hair_above
         if isinstance(self.parts, (list, tuple)) or self.parts is None:
-            parts = collect_parts(self)
+            parts = collect_parts(self, hair)
         else:
-            parts = list(self._value("parts"))
+            parts = with_hair(list(self._value("parts")), hair)
         if not parts:
             raise ValueError(f"{type(self).__name__} has no parts: add Shape attributes or a `parts` list")
         shape = assemble(parts, self._value("smooth"), type(self).__name__)

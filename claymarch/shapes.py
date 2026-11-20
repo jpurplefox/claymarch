@@ -40,6 +40,8 @@ class Material:
     reflection: how much of the sky it mirrors: barely when seen from the
                front, fully at a grazing angle, like water or polished
                things (0 = none, 1 = a mirror at the edges).
+    sheen:     the soft light that fur and velvet catch where the surface
+               turns away from the eye (0 = none, 1 = a strong one).
     opacity:   1 = solid; less lets what is behind show through, tinted with
                the color and a little bent, like water or glass (0 = only the
                highlights are seen). Only the first see-through surface a
@@ -53,6 +55,7 @@ class Material:
     bump = None
     opacity = 1.0
     reflection = 0.0
+    sheen = 0.0
 
     def __init__(self, color=None, **overrides):
         if color is not None:
@@ -94,6 +97,7 @@ class Context:
         self.space = None        # coordinates of the innermost paint() (see _Paint)
         self.turned = 0          # >0 inside a rotation, bend or mirror (see _Repeat)
         self.swaps = []          # the repaints we are inside of, outermost first (see _Repaint)
+        self.hairs = []          # (depth, spacing) of each layer of fuzz (see _Fuzz)
 
     def repainted(self, m):
         """The material that m is drawn with here: each repaint we are inside
@@ -218,10 +222,22 @@ class Shape:
     def rotate_y(self, degrees):          return _Rotate(self, "xz", degrees)
     def rotate_z(self, degrees):          return _Rotate(self, "xy", degrees)
     def scale(self, factor):              return _Scale(self, factor)
-    def ripple(self, height, size=0.2, flow=(0.0, 0.0, 0.0)):
-        """Uneven surface that moves: lumps about `size` across that rise and
-        sink up to height/2, traveling at `flow` units per second."""
-        return _Ripple(self, height, size, flow)
+    def fuzz(self, fuzz, center=(0.0, 0.0, 0.0)):
+        """A soft layer of strands: a Fuzz, or a list of them (see Fuzz).
+        center is added to the place on the skin that grows() is asked about."""
+        layers = _some(fuzz, Fuzz, "Fuzz(length=0.04, spacing=0.01)")
+        if not layers:
+            return self
+        if isinstance(self, _Bound):
+            # the hair goes inside the bounding sphere, which grows to hold
+            # it: outside, the hair's smooth shell would sit on the sphere's
+            # edge, where the distance is the sphere's, and rays crawl there
+            fuzzy = _Fuzz(self.child, layers, center)
+            return _Bound(fuzzy, self.c, self.r + E(fuzzy.top))
+        return _Fuzz(self, layers, center)
+    def ripple(self, height, size=0.2, drift=(0.0, 0.0, 0.0)):
+        """An uneven surface that moves (see Ripple)."""
+        return _Ripple(self, height, size, drift)
     def mirror(self, axis="x"):           return _Mirror(self, axis)
     def bend_x(self, degrees):            return _Bend(self, "yz", degrees)
     def bend_z(self, degrees):            return _Bend(self, "xy", degrees)
@@ -330,13 +346,13 @@ def collect_shapes(obj, list_name):
     (not instantiated) also counts, so `body = Body` and nested classes work."""
     explicit = getattr(obj, list_name, None)
     if explicit is not None:
-        return [_as_shape(v) for v in explicit]
+        return with_hair([_as_shape(v) for v in explicit])
     found = {}
     for cls in reversed(type(obj).__mro__):
         for name, value in vars(cls).items():
             if not name.startswith("_") and (isinstance(value, Shape) or _is_model_class(value)):
                 found[name] = _as_shape(value)
-    return list(found.values())
+    return with_hair(list(found.values()))
 
 
 # ================================================================== drawings
@@ -387,6 +403,8 @@ def _stroke(value, k=1.0):
     """The layer a Path stands for in a drawing (None if it is not one),
     k times bigger."""
     material = None
+    if isinstance(value, _Declared):
+        value = value._built()
     if isinstance(value, _Paint):
         value, material = value.child, value.material
     if not isinstance(value, Path):
@@ -502,21 +520,50 @@ def is_drawing(value):
     return isinstance(value, (Disc, Drawing))
 
 
-def collect_parts(model):
+def is_part(value):
+    """Something a Model can have as a part: a Shape, a Model class, or a
+    drawing (Disc / Drawing) to patch on the parts before it."""
+    return isinstance(value, Shape) or _is_model_class(value) or is_drawing(value)
+
+
+def part_names(cls):
+    """The names of the parts declared on a Model class, in the order they
+    were written: a subclass's after its base's, and one that replaces a
+    part of the base keeps its place."""
+    names = {}
+    for c in reversed(cls.__mro__):
+        for name, value in vars(c).items():
+            if not name.startswith("_") and is_part(value):
+                names[name] = None
+    return list(names)
+
+
+def collect_parts(model, hair=None):
     """The parts of a Model, in the order they were written: an explicit
-    `parts` list, or every class attribute that is a Shape, a Model class, or
-    a drawing (Disc / Drawing) to patch on the parts before it."""
+    `parts` list, or every part declared on its class, then the ones added
+    to the instance (see Model.setup). A part set to None is left out.
+    hair goes on the parts that have none of their own (see with_hair)."""
     explicit = getattr(model, "parts", None)
     if explicit is not None:
-        return [_as_shape(v) for v in explicit]
-    found = {}
-    for cls in reversed(type(model).__mro__):
-        for name, value in vars(cls).items():
-            if name.startswith("_"):
-                continue
-            if isinstance(value, Shape) or _is_model_class(value) or is_drawing(value):
-                found[name] = _as_shape(value)
-    return list(found.values())
+        return with_hair([_as_shape(v) for v in explicit], hair)
+    names = part_names(type(model))
+    names += [name for name, value in vars(model).items()
+              if not name.startswith("_") and name not in names and is_part(value)]
+    values = (getattr(model, name) for name in names)
+    return with_hair([_as_shape(v) for v in values if is_part(v)], hair)
+
+
+def with_hair(parts, hair=None):
+    """The parts, and after them the hair that grows on them (see Hair).
+    hair, the hair of the model they are in, goes on every shape that says
+    nothing of its own, and is handed down to the models inside."""
+    layers = []
+    for part in parts:
+        if isinstance(part, _Declared):
+            layers += part._hairs(hair)
+        elif hasattr(part, "_hand_down_hair"):
+            part._hand_down_hair(hair)
+    return parts + layers
 
 
 def assemble(parts, smooth, who):
@@ -670,7 +717,7 @@ def _as_shape(value):
 # They mean the same as in a Model and are applied in this order.
 # (bend and symmetry are the bend_x / bend_z and mirror methods, under names
 # that do not clash with them.)
-_DECLARED = ("material", "ripple", "size", "rotation", "pivot", "position", "bend", "symmetry", "carve", "clip", "join")
+_DECLARED = ("material", "hair", "ripple", "fuzz", "size", "rotation", "pivot", "position", "bend", "symmetry", "carve", "clip", "join")
 
 
 def _now(value):
@@ -697,9 +744,140 @@ def role_of(carve, clip, join, who):
     return (name, 0.0 if value is True else value)
 
 
+class _Combed:
+    """What Fuzz and Hair have in common: strands `length` long, about
+    `spacing` apart, rising `lift` degrees off the skin and combed toward
+    `flow`. Their properties are given when they are made, or in a subclass.
+
+    grows(out) says how thick they grow, 1 all of them and 0 none, where the
+    skin looks toward out (of length 1). It can also ask for the place on
+    the skin: grows(out, point). Both are in the coordinates of the model
+    the shape is in.
+
+    `material` is drawn in each strand's own coordinates: x is a random
+    number of that strand (0 to 1), y how far it is out of the skin, and z
+    how far along it from its root. With none, the strands look like the
+    skin under them.
+
+    `wind`, (x, y, z), pushes the strands its way: it lays them over and
+    turns them, but never stands them up past their lift; 1 pushes as hard
+    as the combing pulls. It comes in gusts about `gusts` across that travel with
+    it at one unit per second, measured where the strands are, so they run
+    on from one shape into the next."""
+    flow = (0.0, 0.0, -1.0)
+    length = 0.10
+    spacing = 0.011
+    lift = 12
+    material = None
+    wind = None
+    gusts = 0.5
+
+    def __init__(self, **changes):
+        for name, value in changes.items():
+            if name.startswith("_") or not hasattr(type(self), name):
+                raise TypeError(f"{type(self).__name__} has no property '{name}'")
+            setattr(self, name, value)
+        for name in ("flow", "wind"):
+            value = _now(getattr(self, name))
+            if value is not None and len(value) != 3:
+                raise TypeError(f"{type(self).__name__}: {name} is a direction, (x, y, z)")
+        if not 0 < self.lift <= 90:
+            raise TypeError(f"{type(self).__name__}: lift is in degrees, more than 0 and up to 90")
+
+    def grows(self, out):
+        return 1.0
+
+    def _grows(self):
+        """The grows formula, or None when they grow everywhere."""
+        if "grows" not in vars(self) and type(self).grows is _Combed.grows:
+            return None
+        return self.grows
+
+
+class Fuzz(_Combed):
+    """A soft layer of strands around a surface: fur, moss, felt, a peach.
+    There are no single strands to find: a ray that reaches the layer walks
+    through it and gathers the strands it passes, so it costs about the same
+    however thin they are, and the skin is seen through them.
+
+        chest = Ellipsoid(0.26, 0.28, 0.40, fuzz=Fuzz(flow=(0, -0.3, -1)))
+
+    The strands grow in locks, some longer than others. `density` says how
+    much they hide of what is behind: long strands on a thin body look like
+    smoke at the edges, and 2 or 3 makes them full. They rise 45 degrees
+    unless told otherwise: lying flatter, the layer would be too thin to
+    see. The rest is as in Hair (see _Combed)."""
+    lift = 45
+    density = 1.0
+
+
+class Ripple:
+    """An uneven surface that moves: lumps about `size` across that rise and
+    sink up to height / 2, drifting `drift` units per second, (x, y, z)."""
+    def __init__(self, height, size=0.2, drift=(0.0, 0.0, 0.0)):
+        if len(drift) != 3:
+            raise TypeError("Ripple: drift is a speed in each direction, (x, y, z)")
+        self.height, self.size, self.drift = height, size, drift
+
+
+class Hair(_Combed):
+    """Single hairs over a shape, thousands of them, all combed toward
+    `flow`. However many there are, each point of space only looks at the
+    few that grow next to it, so they cost about the same as a handful of
+    shapes.
+
+        chest = Ellipsoid(0.26, 0.28, 0.40, hair=Hair(flow=(0, -0.3, -1)))
+
+    A hair is `width` thick at the root and ends in a point. Lengths vary a
+    little from hair to hair; `seed` picks another set of them. The rest is
+    as in Fuzz (see _Combed).
+
+    On an Ellipsoid the hairs are worked out exactly. On any other shape the
+    skin is taken to be flat around each point, which costs more and goes
+    wrong where the shape is thinner than the hairs are apart."""
+    width = 0.005
+    seed = 1
+
+    def _on(self, skin, declared):
+        """The hairs over skin (a primitive and how it was declared), placed
+        and painted, in the coordinates of the model it is in."""
+        placement = {k: _now(declared[k]) for k in ("size", "rotation", "pivot", "position", "bend", "symmetry")
+                     if k in declared}
+        flow, wind, gusts, own = _now(self.flow), _now(self.wind), _now(self.gusts), _now(self.material)
+        common = (flow, self.length, self.width, self.spacing, self.lift, self.seed, self._grows())
+        radii = _const(skin.r) if type(skin) is Ellipsoid else None
+        if radii is not None:
+            position = placement.get("position", (0.0, 0.0, 0.0))
+            hairs = place(_Hairs(radii, *common, center=position, wind=wind, gusts=gusts, skin_look=own is None),
+                          **placement)
+        else:
+            hairs = _HairsOn(place(skin, **placement), *common, wind=wind, gusts=gusts, skin_look=own is None)
+        material = own if own is not None else _now(declared.get("material"))
+        return hairs.paint(material) if material is not None else hairs
+
+
+def _some(value, kind, example):
+    """Fuzz or Hair as it was given: one, a list of them, or none ([] too).
+    A subclass counts as one made with its own properties."""
+    if value is None:
+        return []
+    found = []
+    for one in value if isinstance(value, (list, tuple)) else [value]:
+        if isinstance(one, type) and issubclass(one, kind):
+            one = one()
+        found.append(_given(one, kind, example))
+    return found
+
+
+def _given(value, kind, example):
+    if value is not None and not isinstance(value, kind):
+        raise TypeError(f"{kind.__name__.lower()} is a {kind.__name__}: {example}, not {value!r}")
+    return value
+
+
 def place(shape, size=1.0, rotation=(0.0, 0.0, 0.0), position=(0.0, 0.0, 0.0),
-          bend=(0.0, 0.0), symmetry=None, ripple=None, pivot=(0.0, 0.0, 0.0)):
-    """Ripple, then size, then rotation (x, y, z), then position, then bend
+          bend=(0.0, 0.0), symmetry=None, ripple=None, pivot=(0.0, 0.0, 0.0), fuzz=None):
+    """Fuzz, then ripple, then size, then rotation (x, y, z), then position, then bend
     (around x, around z), then symmetry. Anything left at its neutral value
     adds no code to the shader.
 
@@ -707,8 +885,11 @@ def place(shape, size=1.0, rotation=(0.0, 0.0, 0.0), position=(0.0, 0.0, 0.0),
     is: they act around it instead of around the origin."""
     bend_x, bend_z = bend
     mirror = symmetry
+    ripple = _given(ripple, Ripple, "Ripple(height=0.1, size=0.3)")
+    if fuzz is not None:
+        shape = shape.fuzz(fuzz, center=position)
     if ripple is not None:
-        shape = shape.ripple(*ripple)
+        shape = shape.ripple(ripple.height, ripple.size, ripple.drift)
     rx, ry, rz = rotation
     grows = not (isinstance(size, (int, float)) and size == 1)
     turns = not (_zero(rx) and _zero(ry) and _zero(rz))
@@ -734,26 +915,110 @@ def place(shape, size=1.0, rotation=(0.0, 0.0, 0.0), position=(0.0, 0.0, 0.0),
     return shape
 
 
+_NEUTRAL = {"material": None, "hair": None, "ripple": None, "fuzz": None, "size": 1.0, "rotation": (0.0, 0.0, 0.0),
+            "pivot": (0.0, 0.0, 0.0), "position": (0.0, 0.0, 0.0), "bend": (0.0, 0.0), "symmetry": None,
+            "carve": None, "clip": None, "join": None}
+
+
 class _Declarative(type):
     """Lets a primitive be written with its placement as properties instead
     of chained calls: the extra keywords are taken out before the primitive
-    sees them, and applied to the finished shape."""
+    sees them, and kept, so they can still be changed (see _Declared)."""
     def __call__(cls, *args, **kw):
-        declared = {k: _now(kw.pop(k)) for k in list(kw) if k in _DECLARED}
-        if declared.get("symmetry") is not None and cls._meets_its_copy:
-            kw["_symmetry"] = declared["symmetry"]
-        shape = super().__call__(*args, **kw)
-        if not declared:
-            return shape
-        material = declared.pop("material", None)
-        role = role_of(declared.pop("carve", None), declared.pop("clip", None),
-                       declared.pop("join", None), cls.__name__)
-        if material is not None:
-            shape = shape.paint(material)
-        shape = place(shape, **declared)
-        if role is not None:
-            shape._role = role
-        return shape
+        declared = {k: kw.pop(k) for k in list(kw) if k in _DECLARED}
+        return _Declared(cls, args, kw, declared)
+
+
+class _Declared(Shape):
+    """A primitive and the properties it was declared with. Changing one
+    (part.material = rust) puts the shape together again, the same as if it
+    had been written that way; the measures of the primitive itself are
+    read (part.r) but not changed: for those, the part is replaced."""
+    def __init__(self, cls, args, kw, declared):
+        self.__dict__.update(_cls=cls, _args=args, _kw=kw, _declared=declared, _shape=None, _bare=None)
+        self._check()
+
+    def __setattr__(self, name, value):
+        if name not in _DECLARED:
+            raise AttributeError(
+                f"{self._cls.__name__}: '{name}' cannot be changed (it can be given {', '.join(_DECLARED)}); "
+                "to change its measures, put a new one in its place")
+        self._declared[name] = value
+        self.__dict__.update(_shape=None, _bare=None)
+        self._check()
+
+    def _check(self):
+        """Put together now, so a wrong value is told where it is written."""
+        self._built()
+        self._role
+        self._hairs()
+
+    def __getattr__(self, name):
+        if name.startswith("__") or name in ("_cls", "_declared"):
+            raise AttributeError(name)
+        if name in _DECLARED:
+            return self._declared.get(name, _NEUTRAL[name])
+        return getattr(self._primitive(), name)
+
+    def __copy__(self):
+        twin = _Declared.__new__(_Declared)
+        twin.__dict__.update(self.__dict__, _declared=dict(self._declared), _shape=None)
+        return twin
+
+    def _primitive(self):
+        if self._bare is None:
+            kw = dict(self._kw)
+            symmetry = _now(self._declared.get("symmetry"))
+            if symmetry is not None and self._cls._meets_its_copy:
+                kw["_symmetry"] = symmetry
+            self.__dict__["_bare"] = type.__call__(self._cls, *self._args, **kw)
+        return self._bare
+
+    def _built(self):
+        if self._shape is None:
+            declared = {k: _now(v) for k, v in self._declared.items()}
+            for name in ("material", "hair", "carve", "clip", "join"):
+                declared.pop(name, None)
+            shape = self._primitive()
+            material = _now(self._declared.get("material"))
+            if material is not None:
+                shape = shape.paint(material)
+            self.__dict__["_shape"] = place(shape, **declared) if declared else shape
+        return self._shape
+
+    @property
+    def _role(self):
+        return role_of(*(_now(self._declared.get(k)) for k in ("carve", "clip", "join")), self._cls.__name__)
+
+    def _hairs(self, above=None):
+        """The hair over the shape (see Hair), each one a part of its own
+        that the model it is in adds after the others. above is the hair of
+        that model, for a shape that says nothing of its own."""
+        if "hair" in self._declared:
+            hair = _now(self._declared["hair"])
+        elif self._role is None or self._role[0] == "join":
+            hair = above
+        else:
+            hair = None     # a shape that carves or clips has no skin to grow on
+        hairs = _some(hair, Hair, "Hair(flow=(0, -1, 0))")
+        layers = [h._on(self._primitive(), self._declared) for h in hairs]
+        for layer in layers:
+            # joined to what is before it with a blend just wide enough to
+            # soften the roots: the model's own smooth would bury the hairs
+            layer._role = ("join", 0.004)
+        return layers
+
+    def emit(self, ctx, p, mat):
+        return self._built().emit(ctx, p, mat)
+
+    def spheres(self):
+        return self._built().spheres()
+
+    def extent(self):
+        return self._built().extent()
+
+    def weight(self):
+        return self._built().weight()
 
 
 class _Primitive(Shape, metaclass=_Declarative):
@@ -836,16 +1101,78 @@ class Capsule(_Primitive):
         return [(a, r1), (b, r2)]
 
 
+def _unit(v):
+    n = _length(v)
+    return tuple(c / n for c in v)
+
+
+def _dot(a, b):
+    return sum(x * y for x, y in zip(a, b))
+
+
 class Curve(_Primitive):
     """Thick curved line: a parabola arc from start to end that bends toward
-    control (without touching it). With radius2 it tapers toward the end."""
-    def __init__(self, start=(0, 0, 0), control=(0, 1, 0), end=(1, 1, 0), radius=0.2, radius2=None):
+    control (without touching it). With radius2 it tapers toward the end.
+
+    With `up` (which way is out of the skin under it, for a lock of hair) it
+    can be flattened against the skin: `flat` is how thick it is compared to
+    how wide (1 = round). `grooves` carves that many lines along it. Its
+    material is then drawn in its own coordinates: z runs along it, from 0
+    at the start to its length at the end, y out of the skin and x across,
+    so a texture stretched along z follows each lock."""
+    def __init__(self, start=(0, 0, 0), control=(0, 1, 0), end=(1, 1, 0), radius=0.2, radius2=None,
+                 up=None, flat=1.0, grooves=0):
         self.a, self.c, self.b = E(start), E(control), E(end)
         self.r1 = E(radius)
         self.r2 = E(radius if radius2 is None else radius2)
+        self.up = up
+        if up is None:
+            if flat != 1 or grooves:
+                raise TypeError("Curve: flat and grooves need up, the way out of the skin under it")
+            return
+        a, c, b, r1, r2 = (_const(v) for v in (self.a, self.c, self.b, self.r1, self.r2))
+        if None in (a, c, b, r1, r2) or not all(isinstance(v, (int, float)) for v in (*up, flat, grooves)):
+            raise TypeError("Curve: with up, every measure is a plain number")
+        along = _unit([y - x for x, y in zip(a, b)])
+        out = [u - _dot(up, along) * w for u, w in zip(up, along)]
+        if _length(out) < 1e-6:
+            raise ValueError("Curve: up cannot point along the curve")
+        out = _unit(out)
+        across = (along[1] * out[2] - along[2] * out[1],
+                  along[2] * out[0] - along[0] * out[2],
+                  along[0] * out[1] - along[1] * out[0])
+        self.frame = (a, across, out, along)
+        bent = [y - x for x, y in zip(a, c)]
+        self.bent = (_dot(bent, across), _dot(bent, out) / flat, _dot(bent, along))
+        self.long = _length([y - x for x, y in zip(a, b)])
+        self.flat, self.grooves = flat, grooves
     def sdf(self, p):
         return (f"sdCurve({p}, {self.a.code}, {self.c.code}, {self.b.code}, "
                 f"{self.r1.code}, {self.r2.code})")
+    def emit(self, ctx, p, mat):
+        if self.up is None:
+            return super().emit(ctx, p, mat)
+        root, across, out, along = self.frame
+        v, q, d = ctx.var("p"), ctx.var("p"), ctx.var("d")
+        ctx.line(f"vec3 {v} = {p}-{E(tuple(root)).code};")
+        ctx.line(f"vec3 {q} = vec3(dot({v},{E(tuple(across)).code}), dot({v},{E(tuple(out)).code}), "
+                 f"dot({v},{E(tuple(along)).code}));")
+        squash = f"{q}*vec3(1.0,{_num(1 / self.flat)},1.0)"
+        width = _const(self.r1)
+        ctx.line(f"float {d} = sdCurve({squash}, vec3(0.0), {E(self.bent).code}, "
+                 f"vec3(0.0,0.0,{_num(self.long)}), {self.r1.code}, {self.r2.code})"
+                 f"*{_num(self.flat)};")
+        if self.grooves:
+            # lines along it, shallower toward the end; the distance is
+            # shrunk by how steep they are, so no step goes through them
+            k = math.pi * self.grooves / width
+            depth = 0.10 * width * self.flat
+            careful = 1.0 / (1.0 + depth * k * 0.5)
+            ctx.line(f"{d} = ({d} + {_num(depth)}*(0.5+0.5*cos({q}.x*{_num(k)}))"
+                     f"*(1.0-0.6*clamp({q}.z/{_num(self.long)},0.0,1.0)))*{_num(careful)};")
+        if _see_through(mat):
+            ctx.line(f"if( gSolid ) {d} = 1e4;")
+        return d, f"{ctx.material_id(mat)}.0", q
     def spheres(self):
         a, c, b, r1, r2 = (_const(v) for v in (self.a, self.c, self.b, self.r1, self.r2))
         if None in (a, c, b, r1, r2):
@@ -1309,19 +1636,323 @@ class _Shell(Shape):
         return self.child.weight()
 
 
+def _push(wind, gusts, where):
+    """GLSL for how the wind pushes the strands at `where`: in gusts `gusts`
+    across that travel with it at one unit per second."""
+    if wind is None:
+        return "vec3(0.0)"
+    wind, g = E(tuple(wind)).code, E(gusts).code
+    travel = f"{wind}/max(length({wind}),1e-4)*iTime"
+    return f"({wind}*(0.2+1.6*noise3(({where}-{travel})/{g})))"
+
+
+def _combing(flow):
+    """GLSL for a flow, made length 1: in Python when it is plain numbers."""
+    if all(isinstance(c, (int, float)) for c in flow):
+        return E(_unit(flow)).code
+    return f"normalize({E(tuple(flow)).code})"
+
+
+def _thickness(grows, out, point):
+    """GLSL for how thick the strands grow where the skin looks toward out,
+    at point (see _Combed.grows)."""
+    if grows is None:
+        return "1.0"
+    asked = (Expr(out, "vec3"), Expr(point, "vec3"))
+    return E(grows(*asked[:len(inspect.signature(grows).parameters)])).code
+
+
+def _strand_number(root, spacing):
+    """GLSL for a random number (0 to 1) of the fuzz strand that grows at
+    root: each strand is a bump of the noise around one point of its
+    lattice, so the nearest of those points tells it from the others."""
+    return f"cellRand(floor({root}/{spacing}+0.5),7.0).x"
+
+
+class _Fuzz(Shape):
+    """A shape with fuzz: soft layers of strands around its surface, one
+    for each Fuzz (see there). `center` is added to the place on the skin
+    that grows() is asked about.
+
+    The hair is not a surface. While a ray looks for what it hits, the
+    outside of the hair is (a smooth shell, as far out from the skin as the
+    tallest layer reaches). When it gets there, the render walks through the
+    hair in short steps, gathering the strands it passes (gHair, see
+    render), and sees the skin or what is behind through whatever they let
+    pass."""
+    def __init__(self, child, layers, center=(0.0, 0.0, 0.0)):
+        self.child, self.layers, self.center = child, list(layers), tuple(center)
+        for layer in self.layers:
+            for name in ("length", "spacing", "lift", "density"):
+                if not isinstance(getattr(layer, name), (int, float)):
+                    raise TypeError(f"Fuzz: {name} is a number")
+        self.tops = [f.length * math.sin(math.radians(f.lift)) for f in self.layers]
+        self.top = max(self.tops)
+    def emit(self, ctx, p, mat):
+        d, m, u = self.child.emit(ctx, p, mat)
+        for f, top in zip(self.layers, self.tops):
+            ctx.hairs.append((E(top), E(f.spacing)))
+        top = _num(self.top)
+        r, n, skin = ctx.var("d"), ctx.var("n"), ctx.var("skin")
+        # m<0: d is a bounding sphere's (see _Bound), not the skin's
+        ctx.line(f"if( {m}>-0.5 ) gHairRoot = min(gHairRoot,{d});")
+        ctx.line(f"float {r} = gHairy==0 ? {d}-{top} : {d};")
+        ctx.line(f"if( gHairy==2 && {d}<{top} ) {{")
+        # which way is out: the slope of the shape, measured around p
+        taps = []
+        for v in ("1,-1,-1", "-1,-1,1", "-1,1,-1", "1,1,1"):
+            dv, _, _ = self.child.emit(ctx, f"({p}+vec3({v})*0.003)", mat)
+            taps.append(f"vec3({v})*{dv}")
+        ctx.line(f"  vec3 {n} = normalize({'+'.join(taps)});")
+        ctx.line(f"  vec3 {skin} = {p}-{n}*{d};")
+        for f, layer_top in zip(self.layers, self.tops):
+            self._emit_layer(ctx, f, layer_top, d, m, u, n, skin)
+        ctx.line("}")
+        return r, m, u
+    def _emit_layer(self, ctx, f, top, d, m, u, n, skin):
+        """The strands of one Fuzz: how far up its strand the point is, and
+        where on the skin that strand grows from: straight down, then back
+        the way the strands lie, as far as they lean at this height."""
+        way, up, h, root, s, k = (ctx.var(x) for x in ("way", "up", "h", "root", "s", "k"))
+        c = _num(f.spacing)
+        push = _push(_now(f.wind), _now(f.gusts), "p0")
+        ctx.line(f"  vec3 {way} = strand({_combing(_now(f.flow))},{push},{n},{_num(math.radians(f.lift))});")
+        # how far up the strand rises for each unit of its length
+        ctx.line(f"  float {up} = max(dot({way},{n}),0.05);")
+        ctx.line(f"  float {h} = clamp({d}/({_num(f.length)}*{up}),0.0,1.0);")
+        ctx.line(f"  vec3 {root} = {skin}-({way}-{n}*{up})*clamp({d},0.0,{_num(top)})/{up};")
+        # a strand grows where the fine noise is high; how long it is, the
+        # coarse one decides, so the hair comes in locks
+        ctx.line(f"  float {s} = noise3({root}/({c}*6.0)+3.7);")
+        thick = _thickness(f._grows(), n, f"({skin}+{E(self.center).code})")
+        dense = "" if f.density == 1 else f"{_num(f.density)}*"
+        ctx.line(f"  float {k} = {dense}{thick}*smoothstep(0.45,0.65,noise3({root}/{c}))"
+                 f"*clamp((0.3+0.7*{s}-{h})/0.15,0.0,1.0);")
+        own = _now(f.material)
+        if own is None:
+            mid, uvw = m, u
+        else:
+            mid = f"{ctx.material_id(as_material(own))}.0"
+            uvw = f"vec3({_strand_number(root, c)},{d},{h}*{_num(f.length)})"
+        ctx.line(f"  if( {k}>gHair ) {{ gHair = {k}; gHairMat = {mid}; gHairUvw = {uvw}; gHairUp = {h}; }}")
+    def spheres(self):
+        inner = self.child.spheres()
+        if inner is None:
+            return None
+        return [(center, radius + self.top) for center, radius in inner]
+    def weight(self):
+        return self.child.weight() + 3
+
+
+class _Hairs(Shape):
+    """Single hairs all over an ellipsoid (radii, centered), for the price of
+    a few: the skin is cut into cells `spacing` apart, one hair grows in
+    each, and every point only looks at the hairs of the cells around it.
+
+    A hair rises `lift` degrees off the skin, combed toward `flow` (where
+    the flow goes straight into or out of the skin, it falls downward), so the
+    one passing through a point grew from a root further back along the
+    flow: the higher the point, the further back. That root is found
+    first, and only the 8 cells around it are asked.
+
+    Where a pixel is wider than a hair, whether it lands on one or between
+    two is chance, and flickers. So as the pixels widen the hairs thin out,
+    a few at a time, and the fur turns into fuzz (see _Fuzz and _emit_fuzz)
+    just as thick: far away there are no hairs left to look for.
+
+    `grows(out)` or `grows(out, point)`, if given, says how thick the hair
+    is (0 to 1) where the skin looks toward out; point is that place on the
+    skin, `center` added. `wind`, a direction, bends the hair its way in
+    gusts (see _strand). Hairs get their material in their own
+    coordinates: x is a random number of each hair (0 to 1), y how far out
+    of the skin, z along the hair from its root; with skin_look, in the
+    coordinates the skin would have there."""
+    fade = (0.7, 3.0)  # the hairs thin out from a pixel this many hairs wide to that one
+    density = 2.0  # how much the fuzz hides, where it has taken over
+    def __init__(self, radii, flow, length, width, spacing, lift, seed, grows=None,
+                 center=(0.0, 0.0, 0.0), wind=None, gusts=0.5, skin_look=False):
+        if len(radii) != 3 or len(flow) != 3:
+            raise TypeError("hair: radii and flow have three numbers, (x, y, z)")
+        if wind is not None and len(wind) != 3:
+            raise TypeError("hair: wind is a direction, (x, y, z)")
+        self.radii, self.flow = tuple(radii), tuple(flow)
+        self.length, self.width, self.spacing = length, width, spacing
+        self.lift, self.seed, self.grows = math.radians(lift), seed, grows
+        self.center, self.wind, self.gusts = tuple(center), wind, gusts
+        self.skin_look = skin_look
+    def _combing(self):
+        return _combing(self.flow)
+    def _strand(self, at, out):
+        """GLSL for which way a hair at `at` goes (see strand in the GLSL),
+        the wind's gusts measured with `center` added, so they run on from
+        one shape into the next."""
+        push = _push(self.wind, self.gusts, f"({at}+{E(self.center).code})")
+        return f"strand({self._combing()},{push},{out},{_num(self.lift)})"
+    def emit(self, ctx, p, mat):
+        F = self._combing()
+        L, W, c = self.length, self.width, self.spacing
+        rise = self.lift
+        top = L * math.sin(rise * 1.1) + W
+        v = {name: ctx.var(name) for name in (
+            "h", "d", "m", "u", "n", "t", "rc", "cell", "ra", "rb", "j", "k",
+            "root", "out", "dir", "a", "way", "side", "q", "up", "dc", "far")}
+        h, d, m, u, far = v["h"], v["d"], v["m"], v["u"], v["far"]
+        lo, hi = (k * W for k in self.fade)
+        ctx.line(f"float {h} = {self._skin(ctx, p, mat)};")
+        ctx.line(f"float {d} = {h}-{_num(top)}; float {m} = -1.0; vec3 {u} = {(ctx.space or p) if self.skin_look else p};")
+        # how far the hairs have given way to the fuzz
+        ctx.line(f"float {far} = smoothstep({_num(lo)},{_num(hi)},gFoot);")
+        ctx.line(f"if( {d}<{_num(0.4 * c)} ) {{")
+        # past the hairs that were found, the next one is at least this far
+        ctx.line(f"  {d} = {_num(0.4 * c)};")
+        # the root of the hair that would pass through p: down to the skin,
+        # then back the way the hair lies, as far as it leans at this height
+        n, t, rc = v["n"], v["t"], v["rc"]
+        ctx.line(f"  vec3 {n} = {self._out(ctx, p, mat)};")
+        ctx.line(f"  vec3 {t} = {self._strand(p, n)};")
+        ctx.line(f"  vec3 {rc} = {p}-{n}*{h}-({t}-{n}*dot({t},{n}))*clamp({h},0.0,{_num(top)})"
+                 f"/max(dot({t},{n}),0.05);")
+        self._onto(ctx, rc, n, mat)
+        ctx.line(f"  vec3 {v['cell']} = floor({rc}/{_num(c)}-0.5);")
+        # once the fuzz has taken over, there are no hairs left to look for
+        ctx.line(f"  for( int i=0; i<({far}<1.0 ? 8 : 0); i++ ) {{")
+        cell, ra, rb, j, k = v["cell"], v["ra"], v["rb"], v["j"], v["k"]
+        ctx.line(f"    vec3 cc = {cell}+vec3(float(i&1),float((i>>1)&1),float((i>>2)&1));")
+        ctx.line(f"    vec3 {ra} = cellRand(cc,{_num(self.seed)}); vec3 {rb} = cellRand(cc,{_num(self.seed + 1)});")
+        # one hair per cell, if the cell's random point is next to the skin
+        ctx.line(f"    vec3 {j} = (cc+{ra})*{_num(c)};")
+        root, out, way, side = v["root"], v["out"], v["way"], v["side"]
+        self._root(ctx, j, k, root, out, n, c, mat)
+        if self.grows is not None:
+            ctx.line(f"    if( {self._thickness(out, root)}<={rb}.z ) continue;")
+        # the farther, the fewer hairs: the fuzz takes the place of the rest
+        ctx.line(f"    if( cellRand(cc,{_num(self.seed + 2)}).x<{far} ) continue;")
+        # the way it lies along the skin, and how far it rises off it (a
+        # hair straight up still has a way, the combing's)
+        dr, a = v["dir"], v["a"]
+        ctx.line(f"    vec3 {dr} = {self._strand(root, out)};")
+        ctx.line(f"    float {a} = asin(clamp(dot({dr},{out}),0.05,1.0));")
+        ctx.line(f"    vec3 {way} = normalize({dr}-{out}*dot({dr},{out})+combed({F},{out})*1e-3);")
+        ctx.line(f"    vec3 {side} = cross({out},{way});")
+        ctx.line(f"    float turn = ({rb}.x-0.5)*0.15;")
+        ctx.line(f"    {way} = {way}*cos(turn)+{side}*sin(turn); {side} = cross({out},{way});")
+        q, up, dc = v["q"], v["up"], v["dc"]
+        ctx.line(f"    vec3 {q} = vec3(dot({p}-{root},{way}), dot({p}-{root},{side}), dot({p}-{root},{out}));")
+        ctx.line(f"    vec2 {up} = vec2(cos({a}*(0.92+0.16*{rb}.y)), sin({a}*(0.92+0.16*{rb}.y)));")
+        ctx.line(f"    float span = {_num(L)}*(0.6+0.4*{ra}.y);")
+        ctx.line(f"    float {dc} = sdCapsule2({q}, vec3(0.0,0.0,-{_num(W)}), vec3({up}.x,0.0,{up}.y)*span, "
+                 f"{_num(0.5 * W)}, {_num(0.15 * W)});")
+        own = "" if self.skin_look else f"{u} = vec3({rb}.x, {q}.z, dot({q}.xz,{up})); "
+        ctx.line(f"    if( {dc}<{d} ) {{ {d} = {dc}; {m} = {ctx.material_id(mat)}.0; {own}}}")
+        ctx.line("  }")
+        ctx.line("}")
+        self._emit_fuzz(ctx, p, mat, v, top)
+        if _see_through(mat):
+            ctx.line(f"if( gSolid ) {d} = 1e4;")
+        return d, m, u
+    def _emit_fuzz(self, ctx, p, mat, v, top):
+        """The fur as fuzz (see _Fuzz), as thick as the hairs that are gone:
+        a smooth shell `top` out from the skin while a ray looks for what it
+        hits, and strands to gather while it walks through. The strands lean
+        as the hairs do and get the coordinates a hair would have there, so
+        they take the same color. Close up, where every hair is still there,
+        there is no shell and no walk."""
+        L, c = self.length, self.spacing
+        ctx.hairs.append((E(top), E(c)))
+        h, d, m, far = v["h"], v["d"], v["m"], v["far"]
+        mid = ctx.material_id(mat)
+        n, way, hh, root, s, k, skin = (ctx.var(x) for x in ("n", "way", "hh", "root", "s", "k", "skin"))
+        ctx.line(f"if( {far}>0.0 ) {{")
+        ctx.line(f"  gHairRoot = min(gHairRoot,{h});")
+        ctx.line(f"  if( gHairy==0 ) {{ if( {h}-{_num(top)}<{d} ) {{ {d} = {h}-{_num(top)}; {m} = {mid}.0; }} }}")
+        ctx.line(f"  else if( gHairy==2 && {h}<{_num(top)} ) {{")
+        ctx.line(f"    vec3 {n} = {self._out(ctx, p, mat)};")
+        ctx.line(f"    vec3 {way} = {self._strand(p, n)};")
+        ctx.line(f"    float {hh} = clamp({h}/{_num(top)},0.0,1.0);")
+        ctx.line(f"    vec3 {skin} = {p}-{n}*{h};")
+        self._onto(ctx, skin, n, mat)
+        ctx.line(f"    vec3 {root} = {skin}-({way}-{n}*dot({way},{n}))*clamp({h},0.0,{_num(top)})"
+                 f"/max(dot({way},{n}),0.05);")
+        ctx.line(f"    float {s} = noise3({root}/({_num(c)}*6.0)+3.7);")
+        ctx.line(f"    float {k} = {far}*{_num(self.density)}*{self._thickness(n, skin)}"
+                 f"*smoothstep(0.45,0.65,noise3({root}/{_num(c)}))"
+                 f"*clamp((0.3+0.7*{s}-{hh})/0.15,0.0,1.0);")
+        uvw = v["u"] if self.skin_look else f"vec3({_strand_number(root, _num(c))},{h},{hh}*{_num(L)})"
+        ctx.line(f"    if( {k}>gHair ) {{ gHair = {k}; gHairMat = {mid}.0; gHairUvw = {uvw}; gHairUp = {hh}; }}")
+        ctx.line("  }")
+        ctx.line("}")
+    # --- the skin: an ellipsoid here, any shape in _HairsOn
+    def _skin(self, ctx, at, mat):
+        """GLSL for how far a point is from the skin."""
+        return f"sdEllipsoid({at}, {E(self.radii).code})"
+    def _out(self, ctx, at, mat):
+        """GLSL for which way is out of the skin, near a point."""
+        R = E(self.radii).code
+        return f"normalize({at}/({R}*{R}))"
+    def _onto(self, ctx, point, out, mat):
+        """Put a point that is near the skin on it."""
+        ctx.line(f"  {point} /= length({point}/{E(self.radii).code});")
+    def _root(self, ctx, j, k, root, out, n, c, mat):
+        """The hair of a cell grows from root, looking toward out, if the
+        cell's random point j is next to the skin."""
+        R = E(self.radii).code
+        ctx.line(f"    float {k} = length({j}/{R});")
+        ctx.line(f"    if( abs({k}-1.0)*{k}/length({j}/({R}*{R}))>{_num(0.5 * c)} ) continue;")
+        ctx.line(f"    vec3 {root} = {j}/{k}; vec3 {out} = normalize({root}/({R}*{R}));")
+    def _thickness(self, out, root):
+        """GLSL for how thick the hair is at a place on the skin."""
+        return _thickness(self.grows, out, f"({root}+{E(self.center).code})")
+    def spheres(self):
+        pad = self.length + self.width
+        return [(center, radius + pad) for center, radius in Ellipsoid(*self.radii).spheres()]
+    def weight(self):
+        return 8
+
+
+class _HairsOn(_Hairs):
+    """_Hairs on any shape (the skin), in the skin's own space. Near a point
+    the skin is taken to be flat: the 8 cells around it are asked how far
+    their random point is from the skin, and the hair grows from there
+    straight down, the way out of the skin at that point."""
+    def __init__(self, skin, flow, length, width, spacing, lift, seed, grows=None, wind=None, gusts=0.5,
+                 skin_look=False):
+        super().__init__((1.0, 1.0, 1.0), flow, length, width, spacing, lift, seed, grows,
+                         wind=wind, gusts=gusts, skin_look=skin_look)
+        self.skin = skin
+    def _skin(self, ctx, at, mat):
+        d, _, _ = self.skin.emit(ctx, at, mat)
+        return d
+    def _out(self, ctx, at, mat):
+        # four points around it: the skin rises toward out
+        e = 0.0005
+        ks = ((1, -1, -1), (-1, -1, 1), (-1, 1, -1), (1, 1, 1))
+        ds = [self._skin(ctx, f"({at}+vec3({k[0] * e},{k[1] * e},{k[2] * e}))", mat) for k in ks]
+        return "normalize(" + "+".join(f"vec3({k[0]}.0,{k[1]}.0,{k[2]}.0)*{d}" for k, d in zip(ks, ds)) + ")"
+    def _onto(self, ctx, point, out, mat):
+        pass
+    def _root(self, ctx, j, k, root, out, n, c, mat):
+        ctx.line(f"    float {k} = {self._skin(ctx, j, mat)};")
+        ctx.line(f"    if( abs({k})>{_num(0.5 * c)} ) continue;")
+        ctx.line(f"    vec3 {root} = {j}-{n}*{k}; vec3 {out} = {n};")
+    def spheres(self):
+        inner = self.skin.spheres()
+        pad = self.length + self.width
+        return None if inner is None else [(center, radius + pad) for center, radius in inner]
+
+
 class _Ripple(Shape):
     """A shape with a lumpy, moving surface: smooth noise added to its
     distance. Skipped far from it, where it changes nothing worth the cost."""
-    def __init__(self, child, height, size, flow):
-        if len(flow) != 3:
-            raise TypeError("ripple: flow is a speed in each direction, (x, y, z)")
-        self.child, self.h, self.size, self.flow = child, E(height), E(size), E(tuple(flow))
+    def __init__(self, child, height, size, drift):
+        if len(drift) != 3:
+            raise TypeError("ripple: drift is a speed in each direction, (x, y, z)")
+        self.child, self.h, self.size, self.drift = child, E(height), E(size), E(tuple(drift))
     def emit(self, ctx, p, mat):
         d, m, u = self.child.emit(ctx, p, mat)
         r = ctx.var("d")
         ctx.line(f"float {r} = {d};")
         ctx.line(f"if( {d}<2.0*{self.h.code} ) {r} += {self.h.code}*"
-                 f"(noise3(({p}-{self.flow.code}*iTime)/{self.size.code})-0.5);")
+                 f"(noise3(({p}-{self.drift.code}*iTime)/{self.size.code})-0.5);")
         return r, m, u
     def spheres(self):
         inner, h = self.child.spheres(), _const(self.h)

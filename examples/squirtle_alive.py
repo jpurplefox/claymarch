@@ -2,14 +2,14 @@
 
 Para verlo:   python -m claymarch examples/squirtle_alive.py
 
-Cada movimiento le dice a una pieza del modelo cómo girar (pose), sin
+Cada movimiento le dice a una pieza del modelo cómo girar (en setup), sin
 tocar el modelo.
 """
 import math
 
 import claymarch
 from squirtle import (
-    Arm, Body, Head, LidEdge, Squirtle, SquirtleScene, Tail,
+    Head, LidEdge, Squirtle, SquirtleScene, Tail,
 )
 
 # Los segundos que tarda la animación en repetirse. Con velocidades
@@ -26,25 +26,21 @@ def blink(t):
     return 1 - claymarch.smoothstep(0.015, 0.045, abs(phase - 0.5))
 
 
-def looking(degrees):
-    """La pose de mirar hacia un costado: la cabeza gira esos grados y el
-    cuerpo la acompaña, girando y ladeándose una parte."""
-    return {
-        Head: {"rotation": (-Head.TILT, degrees, 0)},
-        Body: {"rotation": (0, 0.35 * degrees, 0.15 * degrees)},
-    }
+def look(squirtle, degrees):
+    """Mirar hacia un costado: la cabeza gira esos grados y el cuerpo la
+    acompaña, girando y ladeándose una parte."""
+    squirtle.head.rotation = (-Head.TILT, degrees, 0)
+    squirtle.body.rotation = (0, 0.35 * degrees, 0.15 * degrees)
 
 
 class AliveSquirtle(Squirtle):
-    def pose(self, t):
+    def setup(self, t):
         lid = LidEdge.OPEN + (LidEdge.SHUT - LidEdge.OPEN) * blink(t)
-        return {
-            LidEdge: {"rotation": (-lid, 0, 0)},
-            Tail: {
-                "rotation": (0, Tail.SWING + 7 * claymarch.sin(t * 3.0), 0)
-            },
-            Arm: {"rotation": (0, 0, 9 * claymarch.sin(t * 4.0))},
-        }
+        self.head.lids.edge.rotation = (-lid, 0, 0)
+        self.body.tail.rotation = (
+            0, Tail.SWING + 7 * claymarch.sin(t * 3.0), 0
+        )
+        self.body.arms.rotation = (0, 0, 9 * claymarch.sin(t * 4.0))
 
 
 class AliveScene(SquirtleScene):

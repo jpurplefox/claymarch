@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 from .expr import E, Expr, P, checker, mix, vec3
-from .shapes import Context, Material, Shape, as_material, collect_shapes, union
+from .shapes import Context, Material, Shape, _const, as_material, collect_shapes, union
 
 TEMPLATE = Path(__file__).parent / "template"
 
@@ -214,13 +214,23 @@ class Scene:
             f"    {'if' if i == 0 else 'else if'}( mat<{i}.5 ) "
             f"{{ col = {vec3(mat.value('color')).code}; ks = {E(mat.value('specular')).code}; "
             f"se = {E(mat.value('shininess')).code}; emi = {E(mat.value('glow')).code}; "
-            f"opa = {E(mat.value('opacity')).code}; rfl = {E(mat.value('reflection')).code}; }}"
+            f"opa = {E(mat.value('opacity')).code}; rfl = {E(mat.value('reflection')).code}; "
+            f"shn = {E(mat.value('sheen')).code}; }}"
             for i, mat in enumerate(ctx.materials))
 
         bumps = "\n".join(
             f"    if( abs(mat-{i}.0)<0.5 ) return {E(mat.value('bump')).code};"
             for i, mat in enumerate(ctx.materials) if mat.bump is not None)
 
+        # the hair: how short the steps through it are, and how dense it is
+        lengths = [_const(length) or 0.05 for length, size in ctx.hairs]
+        sizes = [_const(size) or 0.01 for length, size in ctx.hairs]
+        hair = [
+            f"const bool  HAIRY      = {'true' if ctx.hairs else 'false'};",
+            f"const float HAIR_STEP  = {E(min(lengths, default=0.05) / 6).code};",
+            f"const float HAIR_REACH = {E(max(lengths, default=0.05) * 1.02).code};",
+            f"const float HAIR_THICK = {E(1.2 / min(sizes, default=0.01)).code};",
+        ]
         c, l = self.camera or Camera(), self.light or Light()
         f = self.fill or Light()
         constants = "\n".join([
@@ -239,6 +249,7 @@ class Scene:
             f"const vec3  FILL_DIR  = normalize({vec3(f.direction).code});",
             f"const vec3  FILL_COL  = {vec3(f.color).code}*{E(f.intensity if self.fill is not None else 0.0).code};",
             f"#define AA {max(1, int(self.quality))}",
+            *hair,
         ])
 
         base = (TEMPLATE / "base.glsl").read_text(encoding="utf-8")
@@ -286,11 +297,23 @@ vec3 gRd = vec3(0.0);
 // True while a ray looks for what is behind a see-through surface: the
 // see-through things are then left out of the scene.
 bool gSolid = false;
+// Hair (see _Fuzz). gHairy says what map() does with it: 0, the hair is a
+// smooth shell around the skin; 1, there is only the skin; 2, the skin, and
+// besides, how much hair there is at the point (gHair), whose it is
+// (gHairMat, gHairUvw) and how far up its strand (gHairUp). gHairRoot is
+// how far the point is from the skin of the nearest furry thing.
+// How wide one pixel is, at distance 1 (gPixel) and where the ray is now
+// (gFoot): detail finer than gFoot cannot be drawn, only flicker (see Hair).
+float gPixel = 0.0, gFoot = 0.0;
+int   gHairy = 0;
+float gHair = 0.0, gHairRoot = 1e4, gHairMat = 0.0, gHairUp = 0.0;
+vec3  gHairUvw = vec3(0.0);
 
 // Distance function of the whole scene. Besides the distance it returns
 // which material was hit and the coordinates used to draw it.
 float map( in vec3 p0, out float mat, out vec3 uvw )
 {
+    gHair = 0.0; gHairRoot = 1e4;
 //@MAP_BODY
     mat = @OUT_M; uvw = @OUT_U;
     return @OUT_D;
@@ -298,9 +321,9 @@ float map( in vec3 p0, out float mat, out vec3 uvw )
 float map( in vec3 p ) { float m; vec3 u; return map(p,m,u); }
 
 void material( in float mat, in vec3 uvw, out vec3 col, out float ks, out float se, out float emi,
-               out float opa, out float rfl )
+               out float opa, out float rfl, out float shn )
 {
-    col = vec3(0.8); ks = 0.2; se = 32.0; emi = 0.0; opa = 1.0; rfl = 0.0;
+    col = vec3(0.8); ks = 0.2; se = 32.0; emi = 0.0; opa = 1.0; rfl = 0.0; shn = 0.0;
 //@MATERIAL_BODY
 }
 
@@ -330,9 +353,13 @@ vec3 calcNormal( in vec3 pos )
                       e.yxy*mapD(pos+e.yxy) + e.xxx*mapD(pos+e.xxx) );
 }
 
+// Hair is soft: neither shadows nor ambient occlusion take its smooth
+// shell for solid, only the skin under it. Otherwise ground seen through
+// the hair would be lit and ground seen beside it shaded.
 float softShadow( in vec3 ro, in vec3 rd )
 {
     float res = 1.0, t = 0.02, m; vec3 u;
+    int hairy = gHairy; gHairy = 1;
     gRd = rd;
     for( int i=0; i<48; i++ )
     {
@@ -344,12 +371,14 @@ float softShadow( in vec3 ro, in vec3 rd )
         if( res<0.005 || t>12.0 ) break;
     }
     gRd = vec3(0.0);
+    gHairy = hairy;
     return clamp(res,0.0,1.0);
 }
 
 float calcAO( in vec3 pos, in vec3 nor )
 {
     float occ = 0.0, sca = 1.0, m; vec3 u;
+    int hairy = gHairy; gHairy = 1;
     for( int i=0; i<5; i++ )
     {
         float h = 0.01 + 0.15*float(i)/4.0;
@@ -357,6 +386,7 @@ float calcAO( in vec3 pos, in vec3 nor )
         if( m>-0.5 ) occ += (h-d)*sca;      // a bounding sphere does not occlude
         sca *= 0.9;
     }
+    gHairy = hairy;
     return clamp(1.0-2.0*occ,0.0,1.0);
 }
 
@@ -372,6 +402,7 @@ void camera( in vec2 fragCoord, out vec3 ro, out vec3 rd )
     vec3 uu = normalize(cross(ww,vec3(0.0,1.0,0.0)));
     vec3 vv = cross(uu,ww);
     rd = normalize( p.x*uu + p.y*vv + CAM_FL*ww );
+    gPixel = 2.0/(iResolution.y*uLens*CAM_FL*float(AA));
 }
 
 // Advance a ray from distance t until it touches something. seen says
@@ -382,8 +413,11 @@ float march( in vec3 ro, in vec3 rd, in float t, out float mat, out vec3 uvw, ou
     gRd = rd;
     for( int i=0; i<160; i++ )
     {
+        gFoot = t*gPixel;
         float h = map( ro+t*rd, mat, uvw );
-        if( h<0.0005*t+0.0002 ) { hit = true; break; }
+        // mat<0 is never a surface, however close: a safe guess that keeps
+        // a ray from stepping too far (between hairs, see Hair), not a hit
+        if( h<0.0005*t+0.0002 && mat>-0.5 ) { hit = true; break; }
         t += h*0.9;
         if( t>80.0 ) break;
     }
@@ -426,8 +460,8 @@ vec3 shade( in vec3 pos, in vec3 rd, in float mat, in vec3 uvw,
 {
     nor = calcNormal(pos);
 
-    float ks, se, emi, rfl;
-    material( mat, uvw, alb, ks, se, emi, opa, rfl );
+    float ks, se, emi, rfl, shn;
+    material( mat, uvw, alb, ks, se, emi, opa, rfl, shn );
     alb = pow( max(alb,0.0), vec3(2.2) );      // colors are written as seen on screen
 
     float occ = calcAO(pos,nor);
@@ -450,6 +484,15 @@ vec3 shade( in vec3 pos, in vec3 rd, in float mat, in vec3 uvw,
     spe += ks*pow(clamp(dot(nor,normalize(FILL_DIR-rd)),0.0,1.0),se)*fil*FILL_COL;
     col += 0.08*fre*occ;                                                 // rim
     col += alb*emi*2.0;
+    // sheen: light caught by the hairs where the surface turns away from the
+    // eye, brightest on the lit side, never quite gone on the other
+    if( shn>0.0 )
+    {
+        float grazing = pow( clamp(1.0+dot(nor,rd),0.0,1.0), 2.0 );
+        float wrap = clamp( 0.5+0.5*dot(nor,LIGHT_DIR), 0.0, 1.0 );
+        vec3 caught = LIGHT_COL*wrap*(0.3+0.7*sha) + 0.4*AMBIENT*occ;
+        col += shn*grazing*(0.5*alb+0.15)*caught;
+    }
     // the sky mirrored on it: faint from the front, strong at a grazing angle
     if( rfl>0.0 )
     {
@@ -466,6 +509,7 @@ vec3 render( in vec3 ro, in vec3 rd )
 {
     vec3 orb;
     vec3 sky = skyColor( rd, orb );
+    gHairy = 0;
 
     float t = 0.05, mat; vec3 uvw; bool seen;
     // The camera may be INSIDE something (a tree trunk, a hill) after orbiting
@@ -480,12 +524,69 @@ vec3 render( in vec3 ro, in vec3 rd )
     }
     gRd = vec3(0.0);
     t = march( ro, rd, t, mat, uvw, seen );
-    if( !seen ) return sky + orb + glowAir(ro,rd,1e4);
+
+    // Hair: the ray reached the outside of the hair of something furry. From
+    // there it walks in short steps, gathering the strands it passes, until
+    // it reaches the skin, leaves the hair, or the hair hides everything.
+    // What is behind is seen through what the strands let pass (hairT), and
+    // may be the hair of something else: up to three, one after the other.
+    vec3 hairCol = vec3(0.0); float hairT = 1.0;
+    for( int pass=0; pass<3; pass++ )
+    {
+        if( !HAIRY || !seen ) break;
+        vec3 pos = ro + t*rd;
+        gHairy = 0; map( pos );
+        // only where the hair really is: what the ray hit (the ground, say)
+        // may be near something furry and still out of reach of its hair
+        // the ray stops a little short of the hair's outside (as close as
+        // march asks for), so the reach is that much longer
+        float reach = HAIR_REACH + 0.0005*t + 0.0002;
+        if( gHairRoot>=reach || gHairRoot<=0.002 ) break;
+        {
+            // the light is worked out once, where the ray goes in
+            vec3 nor = calcNormal( pos );
+            float sha = softShadow( pos+nor*0.01, LIGHT_DIR );
+            float wrap = clamp( 0.5+0.5*dot(nor,LIGHT_DIR), 0.0, 1.0 );
+            // hair glows when the light is behind it
+            float back = pow( clamp(dot(rd,LIGHT_DIR),0.0,1.0), 4.0 );
+            vec3 lit = LIGHT_COL*(wrap*(0.3+0.7*sha) + 0.8*back*sha) + 0.35*AMBIENT;
+            gHairy = 2; gRd = rd; seen = false;
+            for( int i=0; i<128; i++ )
+            {
+                float h = map( ro+t*rd, mat, uvw );
+                // mat<0 is a safe guess, not a surface (see march)
+                if( h<0.0005*t+0.0002 && mat>-0.5 ) { seen = true; break; }
+                if( gHairRoot>reach ) break;
+                float stp = clamp( h, 0.0015, HAIR_STEP );
+                if( gHair>0.0 )
+                {
+                    vec3 alb; float ks, se, emi, opa, rfl, shn;
+                    material( gHairMat, gHairUvw, alb, ks, se, emi, opa, rfl, shn );
+                    alb = pow( max(alb,0.0), vec3(2.2) );
+                    // darker down at the roots, where less light gets in
+                    vec3 strand = alb*lit*(0.3+0.7*gHairUp);
+                    float a = 1.0-exp( -gHair*HAIR_THICK*stp );
+                    hairCol += hairT*a*strand;
+                    hairT *= 1.0-a;
+                    if( hairT<0.02 ) break;
+                }
+                t += stp;
+            }
+            gRd = vec3(0.0);
+            gHairy = 1;
+            if( seen || hairT<0.02 ) break;
+            // left the hair without touching anything: go on to what is
+            // behind, hair included while there are passes left
+            gHairy = pass<2 ? 0 : 1;
+            t = march( ro, rd, t, mat, uvw, seen );
+        }
+    }
+    if( !seen ) return hairCol + hairT*(sky + orb + glowAir(ro,rd,1e4));
 
     vec3 pos = ro + t*rd;
     vec3 nor, alb, spe; float opa;
     vec3 col = shade( pos, rd, mat, uvw, nor, alb, spe, opa );
-    if( opa>0.999 ) return fade( col+spe, sky, t ) + glowAir(ro,rd,t);
+    if( opa>0.999 ) return hairCol + hairT*(fade( col+spe, sky, t ) + glowAir(ro,rd,t));
 
     // See-through: the ray goes on, a little bent, through a scene without
     // the see-through things, and what it finds is tinted with the color.
@@ -507,7 +608,7 @@ vec3 render( in vec3 ro, in vec3 rd )
     float fre = pow( clamp(1.0+dot(nor,rd),0.0,1.0), 3.0 );
     col = mix( behind*mix(vec3(1.0),alb,0.6), col, opa );
     col += spe + 0.5*(1.0-opa)*fre*sky;        // the highlight and the sky on its edges
-    return fade( col, sky, t ) + glowAir(ro,rd,t);
+    return hairCol + hairT*(fade( col, sky, t ) + glowAir(ro,rd,t));
 }
 
 void mainImage( out vec4 fragColor, in vec2 fragCoord )

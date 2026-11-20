@@ -16,7 +16,11 @@ from claymarch.__main__ import generate
 
 ROOT = Path(__file__).resolve().parent.parent
 RECORD = Path(__file__).with_name("examples.json")
-EXAMPLES = sorted(p.stem for p in (ROOT / "examples").glob("*.py"))
+# a file whose name starts with _ holds pieces the examples share
+EXAMPLES = sorted(
+    p.stem for p in (ROOT / "examples").glob("*.py")
+    if not p.stem.startswith("_")
+)
 
 
 def fingerprint(name, out):

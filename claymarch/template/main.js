@@ -154,6 +154,7 @@ async function record() {
   const num = (name, fallback) => (params.has(name) ? Number(params.get(name)) : fallback);
   const W = num('w', 1080), H = num('h', 1920), seconds = num('seconds', 8), fps = num('fps', 30);
   const sway = num('sway', 0) * Math.PI / 180, total = Math.round(seconds * fps);
+  const orbit = num('orbit', 0) * Math.PI / 180;
   const turn = num('yaw', 0) * Math.PI / 180, lift = num('pitch', 0) * Math.PI / 180;
   const blend = Math.min(num('blend', 0), seconds);
   // how far the picture is slid inside the frame, as a fraction of its height
@@ -172,8 +173,10 @@ async function record() {
     gl.uniform3f(current.u.iResolution, W, H, 1);
     gl.uniform1f(current.u.iTime, t);
     gl.uniform1i(current.u.iFrame, i);
-    // a slow sway that loops, around where the camera was turned to
-    gl.uniform3f(current.u.uOrbit, turn + sway * Math.sin(2 * Math.PI * t / seconds), lift, zoom);
+    // a slow sway that loops, around where the camera was turned to, and
+    // the trip around the scene, spread evenly over the video
+    const around = orbit * t / seconds;
+    gl.uniform3f(current.u.uOrbit, turn + around + sway * Math.sin(2 * Math.PI * t / seconds), lift, zoom);
     gl.uniform2f(current.u.uShift, 2 * slideX, 2 * slideY);
     gl.uniform1f(current.u.uLens, lens);
     gl.drawArrays(gl.TRIANGLES, 0, 3);

@@ -15,7 +15,7 @@ from squirtle import (
     BLUE, BROWN, CREAM, WHITE, Back, Body, Bone, Head, Horn, Plastron, Plate,
     Shell, Skin, Skull, blue, brown, cream, white,
 )
-from squirtle_alive import LOOP, AliveSquirtle, looking
+from squirtle_alive import LOOP, AliveSquirtle, look
 
 
 # La altura del mar en calma. Squirtle está parado en y = 0, sobre una roca
@@ -265,9 +265,8 @@ class Boulder(claymarch.Model):
     ]
 
     material = Stone
-    # La superficie despareja: cuánto sobresalen los bultos y de qué
-    # tamaño son.
-    ripple = (0.10, 0.30)
+    # La superficie despareja.
+    ripple = claymarch.Ripple(height=0.10, size=0.30)
 
 
 class Perch(claymarch.Model):
@@ -307,7 +306,7 @@ class Perch(claymarch.Model):
     ]
 
     material = PerchStone
-    ripple = (0.05, 0.35)
+    ripple = claymarch.Ripple(height=0.05, size=0.35)
 
 
 class Islet(claymarch.Model):
@@ -330,7 +329,7 @@ class Islet(claymarch.Model):
     ]
 
     material = IsletStone
-    ripple = (0.20, 0.80)
+    ripple = claymarch.Ripple(height=0.20, size=0.80)
 
 
 class Tower(claymarch.Material):
@@ -669,7 +668,7 @@ class Causeway(claymarch.Model):
             claymarch.Path(
                 [(x, -self.SUNK, z) for x, z in self.points()],
                 self.WIDE,
-                ripple=(0.30, 0.90),
+                ripple=claymarch.Ripple(height=0.30, size=0.90),
             ),
             # Chata arriba, para caminar.
             claymarch.Box(
@@ -1133,19 +1132,17 @@ class WaterJet(claymarch.Model):
         # boca) al tercero (donde cae) doblándose hacia el del medio, que
         # marca qué tan alto y qué tan lejos llega antes de caer. Los dos
         # últimos números son el grosor al salir y al caer.
-        # ripple le da una superficie despareja que corre con el agua:
-        # cuánto sube y baja, de qué tamaño son las ondas y hacia dónde
-        # van.
+        # ripple le da una superficie despareja que corre con el agua.
         stream = claymarch.Curve(
             (0, 0, -0.06), (0, 0.35, 1.10), lands,
             0.06, 0.13,
-            ripple=(0.07, 0.16, JET_FLOW),
+            ripple=claymarch.Ripple(height=0.07, size=0.16, drift=JET_FLOW),
         )
         # La espuma donde cae: un montículo chato que se mueve.
         splash = claymarch.Ellipsoid(
             0.32, 0.10, 0.32,
             position=lands,
-            ripple=(0.08, 0.12, (0, 1.2, 0)),
+            ripple=claymarch.Ripple(height=0.08, size=0.12, drift=(0, 1.2, 0)),
             material=Foam,
         )
         drops = [
@@ -1189,10 +1186,11 @@ class SeaSquirtle(AliveSquirtle):
 
     jet = WaterJet
 
-    def pose(self, t):
+    def setup(self, t):
         # Lo de siempre (parpadea, menea la cola, aletea), más mover la
         # cabeza de un lado a otro.
-        return {**super().pose(t), **looking(sway(t))}
+        super().setup(t)
+        look(self, sway(t))
 
 
 class Seaside(claymarch.Scene):

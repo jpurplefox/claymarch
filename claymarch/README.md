@@ -92,7 +92,7 @@ All of them are centered at the origin unless noted.
 | `Ellipsoid(rx=0.5, ry=0.5, rz=0.5)` | one radius per axis | the base for rounded, irregular volumes |
 | `Box(width=1, height=1, depth=1, rounding=0)` | full sizes | `rounding` rounds the edges without growing the box |
 | `Capsule(start=(0,0,0), end=(0,1,0), radius=0.2, radius2=None)` | a thick segment | with `radius2` it tapers towards `end` |
-| `Curve(start=(0,0,0), control=(0,1,0), end=(1,1,0), radius=0.2, radius2=None)` | a thick curved line | a parabola arc from `start` to `end`; `control` is where it bulges towards (the curve does not pass through it). With `radius2` it tapers |
+| `Curve(start=(0,0,0), control=(0,1,0), end=(1,1,0), radius=0.2, radius2=None, up=None, flat=1.0, grooves=0)` | a thick curved line | a parabola arc from `start` to `end`; `control` is where it bulges towards (the curve does not pass through it). With `radius2` it tapers. A lock of hair, as a sculptor makes it, is a `Curve` that tapers almost to a point: with `up` (which way is out of the skin under it) it can be flattened against the skin, `flat` being how thick it is compared to how wide, and `grooves` carves that many lines along it. With `up`, its material is drawn in its own coordinates: `z` runs along it, from `0` at `start` to its length at `end`, so a texture stretched along `z` follows each lock |
 | `Path(points, radius=0.1, closed=False, radius2=None)` | a tube that follows a list of points | a chain of `Curve`s. With `radius2` it tapers from the first point to the last, the same amount on every bend (not on a closed one); without it the thickness is the same all along. `points` is a list of `(x, y, z)`, two or more. The tube starts at the first point and ends at the last; each point in between is where it is pulled towards, one bend for each (like the `control` of a `Curve`, it does not pass through them). With three points it is exactly a `Curve`. `closed=True` makes a loop (three or more points): every point pulls and none is touched. With `symmetry`, an end that lies on the mirror plane meets its copy in a curve instead of a corner: half a ring, mirrored, is a whole ring. The points are plain numbers: they cannot change with `t` |
 | `Cylinder(radius=0.5, height=1, rounding=0)` | vertical | |
 | `Torus(radius=0.5, thickness=0.15)` | lying flat (vertical axis) | |
@@ -122,7 +122,9 @@ it is used: `Lamp(position=(1, 0, 0))`).
 | Property | Default | What it is |
 |---|---|---|
 | `material` | `None` | what it is painted with (a `Material`, instance or class) |
-| `ripple` | `None` | an uneven surface that moves: `(height, size)` or `(height, size, flow)`. Lumps about `size` across rise and sink up to `height / 2`; `flow` is how fast they travel, `(x, y, z)` in units per second |
+| `ripple` | `None` | an uneven surface that moves: `Ripple(height, size=0.2, drift=(0, 0, 0))`. Lumps about `size` across rise and sink up to `height / 2`; `drift` is how fast they travel, `(x, y, z)` in units per second |
+| `fuzz` | `None` | a soft layer of strands around the surface, for fur, moss, felt: a `Fuzz(...)`, or a list of them (see [Fur](#fur)) |
+| `hair` | `None` | single hairs over the surface: a `Hair(...)`, or a list of them. On a `Model`, each of its shapes gets it (see [Fur](#fur)) |
 | `size` | `1.0` | uniform scale. At `0` (or below) the piece is not there: it is not drawn, casts no shadow and, as a `carve`, cuts nothing (as a `clip`, it leaves nothing). A size that changes with `t` can reach zero to make a piece appear and vanish |
 | `rotation` | `(0, 0, 0)` | degrees around x, y, z (applied in that order) |
 | `pivot` | `(0, 0, 0)` | the point of the piece that `size` and `rotation` leave where it is: the piece turns and grows around it. It does not move the piece |
@@ -134,7 +136,7 @@ it is used: `Lamp(position=(1, 0, 0))`).
 | `join` | `None` | the role of the piece inside a model: it is added, blended |
 
 **They are always applied in that order**, no matter how they are written:
-first it is painted, then `ripple`, `size`, `rotation`, `position`, `bend`
+first it is painted, then `fuzz`, `ripple`, `size`, `rotation`, `position`, `bend`
 and `symmetry`.
 
 - Painting comes before placing: textures stay glued to the piece and move
@@ -172,6 +174,96 @@ ball = Ball(size=wobble(0.88, 1))
 ```
 
 ---
+
+### Fur
+
+Two ways of covering a surface with strands, written the same way:
+
+- `fuzz` is a soft layer: a ray that reaches it walks through and gathers
+  the strands it passes. There are no single strands to find, so it costs
+  about the same however thin they are, and the outline is soft.
+- `hair` is single hairs, thousands of them. Each point only looks at the
+  few that grow next to it, so they cost about as much as a handful of
+  shapes; close up, each hair can be seen.
+
+```python
+def no_belly(out):
+    return claymarch.smoothstep(-0.75, -0.55, out.y)
+
+
+back = claymarch.Ellipsoid(
+    0.26, 0.28, 0.40,
+    hair=claymarch.Hair(flow=(0, -0.3, -1), material=rust, grows=no_belly),
+)
+```
+
+Changing `Hair` for `Fuzz` there turns the hairs into a soft layer, combed
+the same way. Both take their properties when they are made, or from a
+subclass, so the fur of a whole body can share what it has in common:
+
+```python
+class Windblown(claymarch.Hair):
+    wind = (0.6, 0, 0)
+    material = rust
+
+head = claymarch.Ellipsoid(0.2, 0.18, 0.2, hair=Windblown(length=0.06))
+```
+
+| Property | Default | What it is |
+|---|---|---|
+| `flow` | `(0, 0, -1)` | which way the strands are combed. Where it goes straight into or out of the skin, they fall downward |
+| `length` | `0.10` | how long a strand is. Lengths vary a little |
+| `lift` | `12` (`Hair`), `45` (`Fuzz`) | degrees a strand rises off the skin, up to `90` (straight out). The fur is `length` deep standing up, less the more it lies down |
+| `spacing` | `0.011` | about how far apart the strands grow |
+| `material` | `None` | what the strands are drawn with, in their own coordinates (see below). With none, they look like the skin under them |
+| `grows` | everywhere | how thick the strands grow where the skin faces `out`: `grows(out)` or `grows(out, point)` (see below) |
+| `wind` | `None` | `(x, y, z)`: which way the wind pushes the strands. It lays them over and turns them, even those that stand straight up, but never stands them up past their `lift`. `1` pushes as hard as the combing pulls. It blows in gusts that travel with it at one unit per second, so waves run over the fur. Give every strand of a body the same wind and the gusts run on from one piece into the next |
+| `gusts` | `0.5` | how big the gusts are. Keep them bigger than a strand is long |
+| `density` | `1` | `Fuzz` only: how much the strands hide of what is behind. Long strands on a thin body look like smoke at the edges, and `2` or `3` makes them full |
+| `width` | `0.005` | `Hair` only: how thick a hair is at the root; it ends in a point |
+| `seed` | `1` | `Hair` only: another number grows another set of hairs |
+
+`grows(out)` is a function: `out` is the way the skin faces (an expression,
+of length 1) and it returns how thick the strands grow there, from `1` (all
+of them) to `0` (none); in between they thin out. It can also ask for the
+place on the skin, `grows(out, point)`: on a flat shape the skin faces
+almost the same way all over each side, and `point` tells one spot from
+another. Both are in the coordinates of the model the shape is in.
+
+A `material` is drawn in each strand's own coordinates: `p.x` is a random
+number of that strand (0 to 1), `p.y` how far out of the skin and `p.z` how
+far along it from its root, so roots and tips can have different colors.
+`flow`, `wind`, `gusts` and `material` can also be methods of `t`, in a
+subclass.
+
+A piece can have several: `hair=[Hair(...), Hair(...)]`, each with its own
+`grows`, to comb or paint each zone its own way. `hair=[]` is no hair.
+
+- `fuzz` on a `Model` covers the whole model, as one surface.
+- `hair` on a `Model` goes on each of its shapes, and on the shapes of the
+  models inside, as if it were written on each. A shape or a model inside
+  with a `hair` of its own keeps it, and shapes that `carve` or `clip`
+  get none.
+- The hair of a shape goes on after every other part of the model, with a
+  blend just wide enough to soften the roots: the model's `smooth` does not
+  reach it, so it is not buried. It grows from the shape it is given, not
+  from what the model makes of it: where another part bulges out over it,
+  or a wide `smooth` fills a crease, the hair is buried there.
+- On an `Ellipsoid` the hairs are worked out exactly. On any other shape the
+  skin is taken to be flat around each point: it costs more, and it goes
+  wrong where the shape is thinner than the hairs are apart (the edge of a
+  thin ear). For those, an ellipsoid is the better skin.
+
+The strands of `fuzz` let some of what is behind them show, and glow when
+the light is behind them. It costs: rays that go through it take many short
+steps.
+
+Far away, or at a low resolution, a pixel is wider than a hair, and whether
+it lands on one or between two would be chance: the fur would flicker. So
+as the pixels widen, the hairs thin out a few at a time and the fur turns
+into `fuzz`, just as thick, combed the same way and drawn with the same
+material coordinates. Far enough, only that layer is left. Close up nothing
+changes; in between both are worked out, which is the slowest stretch.
 
 ## Model
 
@@ -213,7 +305,6 @@ Besides the common [properties](#properties), a `Model` has:
 | `smooth` | `0.0` | the radius the parts blend into each other with: with `0` they meet at a sharp edge, with `0.1` they melt together like clay |
 | `material` | `None` | the material for the parts that have none of their own |
 | `repaint` | `None` | the same model with other paint: `{a material: the one that replaces it}`. It reaches every part inside, however deep, so the model itself is not touched (see [The same model, repainted](#the-same-model-repainted)) |
-| `pose` | `None` | how the pieces inside the model are placed: `{a Model class: {"rotation": ...}}`. It reaches every piece of that class, however deep, so the model itself is not touched (see [The same model, posed](#the-same-model-posed)) |
 | `bounds` | `None` | a speed-up: a sphere that contains the whole model (in its own space, before `size`/`rotation`/`position`). Far from the sphere the model is not computed. Left at `None` the sphere is worked out from the parts, so there is nothing to write. A radius, or `(center, radius)`, sets it by hand: it does not change the picture if the sphere really contains the model; if it is too small, the model is clipped. `False` leaves the model without a sphere. Shadows and occlusion ignore the sphere |
 
 Internal order: the parts are put together → painted → `bounds` → `size` →
@@ -268,13 +359,14 @@ class Room(claymarch.Scene):
 - When a repainted model is inside another repainted model, the inner one
   swaps first and the outer one swaps what comes out.
 
-### The same model, posed
+### The same model, changed inside
 
-`pose` places the pieces inside a model from the outside, without rewriting
-it: every piece of the class on the left, at any depth, gets the placement
-on the right. It is how a model is moved by something that is not the model:
-the model says what it is made of and where each piece hinges; whoever uses
-it says how the pieces turn.
+`setup` changes the pieces inside a model without rewriting them. It is a
+method that runs once the model is made, with plain Python: every piece
+that is a model can be reached by its name, at any depth, and any property
+can be given a new value. It is how a model is changed by something that is
+not the model: the model says what it is made of; whoever uses it says what
+changes.
 
 ```python
 class Leaf(claymarch.Model):
@@ -292,25 +384,31 @@ class Garden(claymarch.Model):
 
 
 class OpenGarden(Garden):
-    pose = {Leaf: {"rotation": (0, 70, 0)}}
+    def setup(self):
+        self.gate.leaf.rotation = (0, 70, 0)
+        self.gate.leaf.board.material = rust
+        self.gate.lock = claymarch.Sphere(0.05, position=(1, 0.8, 0))
 
 
 class SwingingGarden(Garden):
-    def pose(self, t):
-        return {Leaf: {"rotation": (0, 40 * claymarch.sin(t), 0)}}
-
-# or, for one instance only: Garden(pose={Leaf: {"rotation": (0, 70, 0)}})
+    def setup(self, t):
+        self.gate.leaf.rotation = (0, 40 * claymarch.sin(t), 0)
 ```
 
-- Pieces are named by their class, and only models can be named: to move a
-  single box, make it a small `Model` of its own.
-- What can be given is where a piece goes: `size`, `rotation`, `pivot`,
-  `position` and `bend`. Each one replaces the piece's own value; the ones
-  left out stay as they were.
-- A subclass counts as its class: `{Leaf: ...}` also places a `TallLeaf(Leaf)`.
-- The pose of a model is for the pieces inside it, not for the model itself.
-- When a posed model is inside another posed model and both name the same
-  piece, the outer one has the last word.
+- Each model has its own pieces: changing `self.gate.leaf` changes the leaf
+  of this garden, not the one of `Gate`, of `Garden` or of another garden.
+- A shape takes the same properties it was written with (`material`,
+  `position`, `rotation`, `join`…). Its measures are not changed: to make
+  the board bigger, put a new `Box` in its place.
+- Giving `setup` a `t` lets it animate what it changes. A property that
+  needs a method of its own can still get one: a subclass of the piece,
+  put in its place (`self.gate.leaf = SwingingLeaf()`).
+- A name the piece does not have adds a part, after the others; `None`
+  takes a part away (`self.gate.post = None`). Any other new name is an
+  error: `self.gate.leaf.rotatoin = ...` does not go by unnoticed.
+- `setup` runs last: it has the last word over the values given to the
+  instance (`Garden(...)`), and when a piece has a `setup` of its own, that
+  one runs first, so the model that contains it has the last word.
 
 ### The role of each part
 
@@ -395,6 +493,9 @@ class TallLamp(Lamp):
     pole = claymarch.Capsule((0, 0, 0), (0, 1.6, 0), 0.03)
     shade = claymarch.CutCone(0.25, 0.12, 0.3, position=(0, 1.7, 0))
 ```
+
+To change something deeper, inside a piece of a piece, use
+[`setup`](#the-same-model-changed-inside).
 
 ---
 
@@ -545,6 +646,7 @@ dark = claymarch.Material(color=(0.10, 0.10, 0.13), specular=0.9, shininess=80)
 | `glow` | `0.0` | light of its own |
 | `bump` | `None` | relief: how much the surface sinks (+) or rises (−) |
 | `reflection` | `0.0` | how much of the sky it mirrors: barely when seen from the front, fully at a grazing angle, like water or polished things. Above `1` it is not what a real surface does, and it is allowed: the mirrored sky outshines the color, for things meant to look unreal |
+| `sheen` | `0.0` | the soft light that fur and velvet catch where the surface turns away from the eye. It brightens the edges, more on the side the light comes from. Around `1` is a strong one |
 | `opacity` | `1.0` | `1` is solid; less lets what is behind show through, tinted with the color and a little bent, like water or glass. `0` leaves only the highlights |
 
 A material only knows those names. Any other attribute (`base = ...`) is
@@ -712,7 +814,7 @@ in red over the page.
 
 ```bash
 python -m claymarch file.py --video out.mp4 [--size 1080x1920] [--seconds 8] [--fps 30]
-    [--zoom 1.0] [--yaw 0] [--pitch 0] [--right 0] [--up 0] [--lens 1] [--sway 0] [--blend 0]
+    [--zoom 1.0] [--yaw 0] [--pitch 0] [--right 0] [--up 0] [--lens 1] [--sway 0] [--orbit 0] [--blend 0]
 ```
 
 It opens a browser tab that draws the video and saves it to `out.mp4`. By
@@ -728,7 +830,8 @@ default it is vertical (1080x1920), meant for a phone.
 | `--right`, `--up` | slide the picture inside the frame without turning the camera, to balance the composition. A fraction of the frame's height: `--right 0.1` moves everything a tenth of the height to the right; negative goes the other way |
 | `--lens` | magnifies the picture without moving the camera, like a longer lens: `2` shows everything twice as big. Unlike `--zoom`, near and far things keep their sizes relative to each other. `--right` and `--up` are applied after it |
 | `--sway` | degrees the camera swings sideways, there and back, along the video |
-| `--blend` | seconds at the end that dissolve into the beginning, so that the video loops (see below) |
+| `--orbit` | degrees the camera travels around the scene along the video, at an even pace: `360` goes once around and ends where it started |
+| `--blend` | seconds at the end that dissolve into the beginning, so that the video loops (see [Fur](#fur)) |
 | `--no-open` | does not open the browser: prints the link to open it by hand |
 
 How it works: first it draws every frame at its exact instant, however long

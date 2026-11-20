@@ -145,88 +145,171 @@ def swing(t):
     return (0, 40 * claymarch.sin(t), 0)
 
 
-def test_pose_places_a_piece_deep_inside(tmp_path):
+class OpenFence(Fence):
+    def setup(self):
+        self.gate.leaf.rotation = (0, 70, 0)
+
+
+def test_setup_changes_a_piece_deep_inside(tmp_path):
     class OpenGate(claymarch.Model):
         post = claymarch.Box(0.1, 2, 0.1, material=moss)
-        leaf = Hinge(position=(0, 0.5, 0), rotation=swing)
+        leaf = Hinge(position=(0, 0.5, 0), rotation=(0, 70, 0))
 
-    class OpenFence(claymarch.Model):
+    class Written(claymarch.Model):
         gate = OpenGate(position=(2, 0, 0))
 
-    class Posed(claymarch.Scene):
-        fence = Fence(pose={Hinge: {"rotation": swing}})
-
-    class Written(claymarch.Scene):
+    class Changed(claymarch.Scene):
         fence = OpenFence
 
-    assert scene_text(Posed, tmp_path / "a") == scene_text(
-        Written, tmp_path / "b"
+    class Rewritten(claymarch.Scene):
+        fence = Written
+
+    assert scene_text(Changed, tmp_path / "a") == scene_text(
+        Rewritten, tmp_path / "b"
     )
 
 
-def test_pose_can_be_a_method_of_time(tmp_path):
+def test_setup_changes_only_that_model(tmp_path):
+    class Plain(claymarch.Scene):
+        fence = Fence
+
+    before = scene_text(Plain, tmp_path / "a")
+    OpenFence()
+
+    class Both(claymarch.Scene):
+        fence = Fence
+        open = OpenFence(position=(5, 0, 0))
+
+    assert scene_text(Plain, tmp_path / "b") == before
+    assert Gate.leaf.rotation == (0.0, 0.0, 0.0)
+    # the hinge keeps the position its gate gave it
+    assert "vec3(0.0, 0.5, 0.0)" in scene_text(Both, tmp_path / "c")
+
+
+def test_setup_can_receive_t(tmp_path):
     class Swinging(Fence):
-        def pose(self, t):
-            return {Hinge: {"rotation": swing(t)}}
+        def setup(self, t):
+            self.gate.leaf.rotation = swing(t)
 
     class Method(claymarch.Scene):
         fence = Swinging
 
-    class Value(claymarch.Scene):
-        fence = Fence(pose={Hinge: {"rotation": swing}})
+    class Written(claymarch.Scene):
+        fence = Fence(
+            gate=Gate(
+                leaf=Hinge(position=(0, 0.5, 0), rotation=swing),
+                position=(2, 0, 0),
+            )
+        )
 
     assert scene_text(Method, tmp_path / "a") == scene_text(
-        Value, tmp_path / "b"
+        Written, tmp_path / "b"
     )
 
 
-def test_pose_replaces_only_what_it_names(tmp_path):
-    class Posed(claymarch.Scene):
-        fence = Fence(pose={Hinge: {"rotation": (0, 30, 0)}})
+def test_the_outer_setup_has_the_last_word(tmp_path):
+    class Half(Gate):
+        def setup(self):
+            self.leaf.rotation = (0, 10, 0)
 
-    text = scene_text(Posed, tmp_path)
-    # the hinge keeps the position its gate gave it
-    assert "vec3(0.0, 0.5, 0.0)" in text
-
-
-def test_the_outer_pose_has_the_last_word(tmp_path):
     class Inner(claymarch.Model):
-        gate = Gate(pose={Hinge: {"rotation": (0, 10, 0)}})
+        gate = Half
 
-    class Both(claymarch.Scene):
-        thing = Inner(pose={Hinge: {"rotation": (0, 70, 0)}})
+        def setup(self):
+            self.gate.leaf.rotation = (0, 70, 0)
 
-    class Outer(claymarch.Scene):
-        thing = Gate(pose={Hinge: {"rotation": (0, 70, 0)}})
-
-    assert scene_text(Both, tmp_path / "a") == scene_text(
-        Outer, tmp_path / "b"
-    )
-
-
-def test_a_pose_is_not_for_the_model_that_has_it(tmp_path):
-    class Plain(claymarch.Scene):
+    class Outer(claymarch.Model):
         gate = Gate
 
-    class Posed(claymarch.Scene):
-        gate = Gate(pose={Gate: {"position": (5, 0, 0)}})
+        def setup(self):
+            self.gate.leaf.rotation = (0, 70, 0)
 
-    assert scene_text(Plain, tmp_path / "a") == scene_text(
-        Posed, tmp_path / "b"
-    )
+    class A(claymarch.Scene):
+        thing = Inner
+
+    class B(claymarch.Scene):
+        thing = Outer
+
+    assert scene_text(A, tmp_path / "a") == scene_text(B, tmp_path / "b")
 
 
-def test_pose_says_what_is_wrong(tmp_path):
-    class NotAClass(claymarch.Scene):
-        gate = Gate(pose={"leaf": {"rotation": (0, 30, 0)}})
+def test_setup_adds_and_takes_away_parts(tmp_path):
+    class Changed(Gate):
+        def setup(self):
+            self.leaf = None
+            self.top = claymarch.Sphere(0.3, position=(0, 1, 0))
 
-    class NotAPlacement(claymarch.Scene):
-        gate = Gate(pose={Hinge: {"smooth": 0.1}})
+    class Written(claymarch.Model):
+        post = claymarch.Box(0.1, 2, 0.1, material=moss)
+        top = claymarch.Sphere(0.3, position=(0, 1, 0))
 
-    with pytest.raises(TypeError, match="by their class"):
-        scene_text(NotAClass, tmp_path)
-    with pytest.raises(TypeError, match="smooth"):
-        scene_text(NotAPlacement, tmp_path)
+    class A(claymarch.Scene):
+        gate = Changed
+
+    class B(claymarch.Scene):
+        gate = Written
+
+    assert scene_text(A, tmp_path / "a") == scene_text(B, tmp_path / "b")
+
+
+def test_setup_changes_a_shape_of_a_piece(tmp_path):
+    class Rusty(Fence):
+        def setup(self):
+            self.gate.post.material = rust
+            self.gate.post.position = (0, 1, 0)
+
+    class RustyGate(claymarch.Model):
+        post = claymarch.Box(0.1, 2, 0.1, material=rust, position=(0, 1, 0))
+        leaf = Hinge(position=(0, 0.5, 0))
+
+    class Written(claymarch.Model):
+        gate = RustyGate(position=(2, 0, 0))
+
+    class Plain(claymarch.Scene):
+        fence = Fence
+
+    before = scene_text(Plain, tmp_path / "a")
+
+    class A(claymarch.Scene):
+        fence = Rusty
+
+    class B(claymarch.Scene):
+        fence = Written
+
+    assert scene_text(A, tmp_path / "b") == scene_text(B, tmp_path / "c")
+    assert scene_text(Plain, tmp_path / "d") == before
+
+
+def test_the_measures_of_a_shape_are_not_changed_but_replaced():
+    class Wrong(Gate):
+        def setup(self):
+            self.post.height = 3
+
+    with pytest.raises(AttributeError, match="new one in its place"):
+        Wrong()
+
+
+def test_setup_has_the_last_word_over_the_instance(tmp_path):
+    class Raised(Gate):
+        def setup(self):
+            self.position = (0, 1, 0)
+
+    class A(claymarch.Scene):
+        gate = Raised(position=(5, 0, 0))
+
+    class B(claymarch.Scene):
+        gate = Gate(position=(0, 1, 0))
+
+    assert scene_text(A, tmp_path / "a") == scene_text(B, tmp_path / "b")
+
+
+def test_a_misspelled_property_in_setup_is_an_error():
+    class Wrong(Gate):
+        def setup(self):
+            self.leaf.rotatoin = (0, 30, 0)
+
+    with pytest.raises(AttributeError, match="rotatoin"):
+        Wrong()
 
 
 def test_clip_leaves_what_is_inside_the_part(tmp_path):
@@ -308,3 +391,334 @@ def test_a_mirrored_path_away_from_the_plane_is_left_alone(tmp_path):
     assert scene_text(Declared, tmp_path / "a") == scene_text(
         ByHand, tmp_path / "b"
     )
+
+
+def test_sheen_reaches_the_shader(tmp_path):
+    velvet = claymarch.Material(color=(0.5, 0.2, 0.2), sheen=0.9)
+
+    class Cushion(claymarch.Scene):
+        ball = claymarch.Sphere(0.5, material=velvet)
+
+    assert "shn = 0.9;" in scene_text(Cushion, tmp_path)
+
+
+def test_fuzz_declared_is_fuzz_chained(tmp_path):
+    fuzz = claymarch.Fuzz(length=0.04, spacing=0.02, flow=(0, 0, -1))
+
+    class Declared(claymarch.Scene):
+        ball = claymarch.Sphere(0.5, fuzz=fuzz)
+
+    class Chained(claymarch.Scene):
+        ball = claymarch.Sphere(0.5).fuzz(fuzz)
+
+    assert scene_text(Declared, tmp_path / "a") == scene_text(
+        Chained, tmp_path / "b"
+    )
+
+
+def test_denser_fuzz_stops_more_light(tmp_path):
+    class Thin(claymarch.Scene):
+        ball = claymarch.Sphere(0.5, fuzz=claymarch.Fuzz())
+
+    class Dense(claymarch.Scene):
+        ball = claymarch.Sphere(0.5, fuzz=claymarch.Fuzz(density=3))
+
+    assert "3.0*1.0*smoothstep(0.45" not in scene_text(Thin, tmp_path / "a")
+    assert "3.0*1.0*smoothstep(0.45" in scene_text(Dense, tmp_path / "b")
+
+
+def test_fuzz_makes_room_in_the_bounding_sphere():
+    furry = claymarch.Sphere(0.5).fuzz(claymarch.Fuzz(length=0.04, lift=90))
+    [(center, radius)] = furry.spheres()
+    assert radius == pytest.approx(0.54)
+
+
+def test_lying_fuzz_is_as_deep_as_it_rises():
+    furry = claymarch.Sphere(0.5).fuzz(claymarch.Fuzz(length=0.04, lift=30))
+    [(center, radius)] = furry.spheres()
+    assert radius == pytest.approx(0.52)
+
+
+def test_a_model_can_have_fuzz(tmp_path):
+    class Furry(claymarch.Model):
+        ball = claymarch.Sphere(0.5)
+        fuzz = claymarch.Fuzz()
+
+    class Bare(claymarch.Model):
+        ball = claymarch.Sphere(0.5)
+
+    class A(claymarch.Scene):
+        thing = Furry
+
+    class B(claymarch.Scene):
+        thing = Bare
+
+    assert scene_text(A, tmp_path / "a") != scene_text(B, tmp_path / "b")
+
+
+def test_fuzz_is_written_like_hair(tmp_path):
+    def front(out, point):
+        return claymarch.smoothstep(0.2, 0.4, out.z)
+
+    class Windblown(claymarch.Fuzz):
+        flow = (0, -1, 0)
+        lift = 40
+        wind = (0.5, 0, 0)
+        material = claymarch.Material(color=(0.9, 0.9, 0.8))
+
+    class Furry(claymarch.Scene):
+        ball = claymarch.Sphere(0.5, fuzz=Windblown(grows=front))
+
+    code = scene_text(Furry, tmp_path)
+    assert "strand(vec3(0.0, -1.0, 0.0),(vec3(0.5, 0.0, 0.0)*" in code
+    assert "smoothstep(0.2, 0.4, " in code
+    with pytest.raises(TypeError, match="lean"):
+        claymarch.Fuzz(lean=(0, 0, -0.03))
+
+
+def test_a_shape_can_have_several_fuzzes(tmp_path):
+    cream = claymarch.Material(color=(0.9, 0.9, 0.8))
+
+    class Two(claymarch.Scene):
+        ball = claymarch.Sphere(
+            0.5,
+            fuzz=[claymarch.Fuzz(), claymarch.Fuzz(length=0.2, material=cream)],
+        )
+
+    code = scene_text(Two, tmp_path).split("float map(")[1]
+    assert code.count("smoothstep(0.45,0.65,") == 2
+
+
+def test_strands_without_a_material_look_like_the_skin(tmp_path):
+    cream = claymarch.Material(color=(0.9, 0.9, 0.8))
+
+    class Plain(claymarch.Scene):
+        ball = claymarch.Sphere(0.5, fuzz=claymarch.Fuzz())
+
+    class Painted(claymarch.Scene):
+        ball = claymarch.Sphere(0.5, fuzz=claymarch.Fuzz(material=cream))
+
+    plain = scene_text(Plain, tmp_path / "a").split("float map(")[1]
+    painted = scene_text(Painted, tmp_path / "b").split("float map(")[1]
+    assert "gHairUvw = vec3(" not in plain
+    # each strand, a random number of its own
+    assert "gHairUvw = vec3(cellRand(floor(" in painted
+
+
+def test_a_flat_curve_draws_in_its_own_coordinates(tmp_path):
+    class Lock(claymarch.Scene):
+        lock = claymarch.Curve(
+            (0, 0, 0), (0, 0.05, -0.5), (0, 0, -1), 0.1, 0.012,
+            up=(0, 1, 0), flat=0.5, grooves=3,
+        )
+
+    code = scene_text(Lock, tmp_path)
+    assert "*vec3(1.0,2.0,1.0)" in code.replace(" ", "")
+
+
+def test_a_curve_cannot_lie_along_its_own_up():
+    with pytest.raises(ValueError, match="up cannot point along"):
+        claymarch.Curve((0, 0, 0), (0, 0.5, 0), (0, 1, 0), 0.1, up=(0, 1, 0))
+
+
+def test_a_curve_is_flattened_only_against_a_skin():
+    with pytest.raises(TypeError, match="need up"):
+        claymarch.Curve((0, 0, 0), (0, 0.5, 0), (0, 1, 0), 0.1, flat=0.5)
+
+
+def hairy(hair, shape=None):
+    """A scene with one shape covered in hair."""
+    class Furry(claymarch.Scene):
+        ball = (shape or claymarch.Ellipsoid)(0.3, 0.2, 0.4, hair=hair)
+
+    return Furry
+
+
+def test_hair_looks_for_hairs_near_each_point(tmp_path):
+    code = scene_text(hairy(claymarch.Hair(flow=(0, 0, -1))), tmp_path)
+    assert "strand(vec3(0.0, 0.0, 1.0)" not in code
+    assert "strand(vec3(0.0, 0.0, -1.0)" in code
+    assert "? 8 : 0); i++ )" in code
+
+
+def test_hair_grows_only_where_it_says(tmp_path):
+    def grows(out):
+        return claymarch.smoothstep(0.2, 0.4, out.y)
+
+    furry = scene_text(hairy(claymarch.Hair(grows=grows)), tmp_path / "a")
+    plain = scene_text(hairy(claymarch.Hair()), tmp_path / "b")
+    assert "smoothstep(0.2, 0.4, " in furry
+    assert "smoothstep(0.2, 0.4, " not in plain
+
+
+def test_a_model_makes_room_for_the_hair_of_its_parts():
+    class Ball(claymarch.Model):
+        ball = claymarch.Sphere(0.3)
+        other = claymarch.Sphere(0.1, position=(1, 0, 0))
+
+    class Furry(Ball):
+        ball = claymarch.Ellipsoid(
+            0.3, 0.3, 0.3, hair=claymarch.Hair(length=0.1)
+        )
+
+    _, bare = Ball().extent()
+    _, furry = Furry().extent()
+    assert furry > bare
+
+
+def test_hair_can_ask_where_on_the_skin(tmp_path):
+    def grows(out, point):
+        return claymarch.step(1.1, point.y)
+
+    class Furry(claymarch.Scene):
+        ball = claymarch.Ellipsoid(
+            0.3, 0.2, 0.4, position=(0, 1, 0),
+            hair=claymarch.Hair(grows=grows),
+        )
+
+    assert "+vec3(0.0, 1.0, 0.0)).y)" in scene_text(Furry, tmp_path)
+
+
+def test_hair_grows_on_any_shape(tmp_path):
+    class Furry(claymarch.Scene):
+        neck = claymarch.Capsule(
+            (0, 0, 0), (0, 1, 0), 0.2, hair=claymarch.Hair()
+        )
+
+    code = scene_text(Furry, tmp_path).split("float map(")[1]
+    assert "? 8 : 0); i++ )" in code
+    assert "sdEllipsoid" not in code
+
+
+def test_a_shape_can_have_several_hairs(tmp_path):
+    def top(out):
+        return claymarch.step(0.0, out.y)
+
+    def bottom(out):
+        return claymarch.step(out.y, 0.0)
+
+    one = scene_text(hairy(claymarch.Hair(grows=top)), tmp_path / "a")
+    both = scene_text(
+        hairy([claymarch.Hair(grows=top), claymarch.Hair(grows=bottom)]),
+        tmp_path / "b",
+    )
+    assert one.count("? 8 : 0); i++ )") == 1
+    assert both.count("? 8 : 0); i++ )") == 2
+
+
+def test_a_model_puts_its_hair_on_each_of_its_shapes(tmp_path):
+    class Arm(claymarch.Model):
+        upper = claymarch.Ellipsoid(0.1, 0.3, 0.1)
+        lower = claymarch.Capsule((0, -0.3, 0), (0, -0.7, 0), 0.08)
+
+    class Body(claymarch.Model):
+        trunk = claymarch.Ellipsoid(0.3, 0.4, 0.3)
+        arm = Arm
+        hole = claymarch.Sphere(0.1, position=(0, 0.4, 0), carve=0.01)
+        eye = claymarch.Sphere(0.03, position=(0, 0.3, 0.3), hair=[])
+
+        hair = claymarch.Hair()
+
+    class Furry(claymarch.Scene):
+        body = Body
+
+    code = scene_text(Furry, tmp_path).split("float map(")[1]
+    # the trunk, the upper arm and the lower one; not the hole nor the eye
+    assert code.count("? 8 : 0); i++ )") == 3
+
+
+def test_a_shape_keeps_its_own_hair_in_a_hairy_model(tmp_path):
+    class Body(claymarch.Model):
+        trunk = claymarch.Ellipsoid(0.3, 0.4, 0.3)
+        ear = claymarch.Ellipsoid(
+            0.1, 0.2, 0.05, hair=claymarch.Hair(flow=(0, 1, 0))
+        )
+
+        hair = claymarch.Hair(flow=(0, -1, 0))
+
+    class Furry(claymarch.Scene):
+        body = Body
+
+    code = scene_text(Furry, tmp_path)
+    assert code.count("strand(vec3(0.0, -1.0, 0.0)") == 3
+    assert code.count("strand(vec3(0.0, 1.0, 0.0)") == 3
+
+
+def test_hair_is_written_with_its_class():
+    with pytest.raises(TypeError, match="Hair"):
+        claymarch.Sphere(0.5, hair=(0, -1, 0))
+    with pytest.raises(TypeError, match="lenght"):
+        claymarch.Hair(lenght=0.1)
+
+
+def test_fuzz_and_ripple_are_written_with_their_classes():
+    with pytest.raises(TypeError, match="Fuzz"):
+        claymarch.Sphere(0.5, fuzz=(0.04, 0.02))
+    with pytest.raises(TypeError, match="Ripple"):
+        claymarch.Sphere(0.5, ripple=(0.1, 0.3))
+
+
+def test_ripple_drifts(tmp_path):
+    class Stream(claymarch.Scene):
+        water = claymarch.Sphere(
+            0.5, ripple=claymarch.Ripple(height=0.1, drift=(0, 1, 0))
+        )
+
+    assert "-vec3(0.0, 1.0, 0.0)*iTime)" in scene_text(Stream, tmp_path)
+
+
+def test_wind_moves_the_hair_with_time(tmp_path):
+    calm = scene_text(hairy(claymarch.Hair()), tmp_path / "a")
+    blown = scene_text(
+        hairy(claymarch.Hair(wind=(0.5, 0, 0))), tmp_path / "b"
+    )
+    assert "*(0.2+1.6*noise3(" not in calm.split("float map(")[1]
+    assert "vec3(0.5, 0.0, 0.0)*(0.2+1.6*noise3(" in blown
+
+
+def test_wind_lays_over_strands_that_stand_straight_up(tmp_path):
+    class Standing(claymarch.Scene):
+        ball = claymarch.Sphere(
+            0.5, fuzz=claymarch.Fuzz(lift=90, wind=(0.5, 0, 0))
+        )
+
+    code = scene_text(Standing, tmp_path).split("float map(")[1]
+    assert "strand(vec3(0.0, 0.0, -1.0),(vec3(0.5, 0.0, 0.0)*" in code
+
+
+def test_wind_blows_fuzz_in_gusts_through_the_scene(tmp_path):
+    class Still(claymarch.Model):
+        ball = claymarch.Sphere(0.5)
+        fuzz = claymarch.Fuzz()
+
+    class Windy(Still):
+        fuzz = claymarch.Fuzz(wind=(0.5, 0, 0))
+
+    class Calm(claymarch.Scene):
+        thing = Still
+
+    class Blown(claymarch.Scene):
+        thing = Windy
+
+    assert "iTime" not in scene_text(Calm, tmp_path / "a").split(
+        "float map("
+    )[1]
+    blown = scene_text(Blown, tmp_path / "b")
+    assert "vec3(0.5, 0.0, 0.0)*(0.2+1.6*noise3((p0-" in blown
+
+
+def test_hair_turns_into_fuzz_when_pixels_are_wider_than_hairs(tmp_path):
+    code = scene_text(hairy(claymarch.Hair()), tmp_path)
+    body = code.split("float map(")[1]
+    assert ",gFoot);" in body
+    assert "gHairy==2" in body
+    assert "const bool  HAIRY      = true;" in code
+
+
+def test_the_combing_can_change_with_time(tmp_path):
+    class Swaying(claymarch.Hair):
+        def flow(self, t):
+            return (claymarch.sin(t), 0, -1)
+
+    code = scene_text(hairy(Swaying()), tmp_path)
+    assert "strand(normalize(vec3(sin(iTime)" in code
