@@ -174,15 +174,9 @@ def bark_moss(p):
     return moss * claymarch.smoothstep(1.15, 0.95, p.y)
 
 
-STUB_BASE = (0.30, 0.50, 1.70)  # donde el gajo cortado sale de la rama
-
-
 class BarkMoss(MossFuzz):
     def grows(self, out, point):
-        # ni alrededor del gajo: ahí el musgo de la rama quedaría como un
-        # aro alrededor de su base
-        stub = claymarch.length(point - STUB_BASE)
-        return bark_moss(point) * claymarch.smoothstep(0.35, 0.55, stub)
+        return bark_moss(point)
 
 
 def cracks(p):
@@ -326,8 +320,10 @@ class Branch(claymarch.Model):
     knot_2 = claymarch.Ellipsoid(
         0.14, 0.13, 0.18, position=(-0.42, 0.50, -1.20)
     )
-    # Un gajo cortado, corto y grueso.
-    stub = claymarch.Capsule(STUB_BASE, (0.88, 0.64, 1.95), 0.15, 0.13)
+    # Un gajo cortado, corto y grueso, que sale para arriba. Va de costado
+    # a la cámara: si apuntara hacia ella, se vería solo su punta redonda,
+    # como un aro.
+    stub = claymarch.Capsule((0.30, 0.70, 1.70), (0.08, 1.08, 1.70), 0.15, 0.13)
     # Una ramita viva: sale cerca del extremo de atrás, sube y se afina.
     twig = claymarch.Curve(
         (-0.30, 0.55, -2.60), (-0.35, 1.55, -2.85), TWIG_TIP, 0.12, 0.04
